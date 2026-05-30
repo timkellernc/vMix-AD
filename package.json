@@ -4,14 +4,35 @@
   "description": "vMix AD - Rundown Creator Integration",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.dirtvision.vmixad",
+    "productName": "vMix AD",
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "${productName}.exe"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/electron-builder",
+      "!node_modules/electron"
+    ]
   },
   "dependencies": {
     "electron-store": "^8.1.0",
-    "ffprobe-static": "^3.1.0",
     "get-video-duration": "^5.0.0"
   },
   "devDependencies": {
-    "electron": "^28.3.3"
+    "electron": "^28.3.3",
+    "electron-builder": "^26.8.1",
+    "jimp": "^0.16.13",
+    "png-to-ico": "^3.0.1"
   }
 }

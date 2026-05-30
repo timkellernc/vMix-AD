@@ -11,16 +11,19 @@
 <body>
 
   <header class="top-bar">
-    <div class="logo">
+    <div class="logo" style="flex: 1; display: flex; justify-content: flex-start;">
       <h1>vMix AD</h1>
     </div>
 
-    <button id="active-rundown-title" class="btn secondary"
-      style="flex: 1; margin: 0 20px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;" title="Select Rundown">
-      Select Rundown
-    </button>
+    <div style="flex: 2; display: flex; justify-content: center; padding: 0 20px; overflow: hidden;">
+      <button id="active-rundown-title" class="btn secondary"
+        style="width: 100%; max-width: 600px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;"
+        title="Select Rundown">
+        Select Rundown
+      </button>
+    </div>
 
-    <div class="actions" style="display: flex; gap: 12px; align-items: center;">
+    <div class="actions" style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-end;">
       <button id="btn-settings" class="btn icon-btn" title="Settings">⚙️</button>
     </div>
   </header>
@@ -34,14 +37,34 @@
           title="Reset API Rundown (Clear Loaded State)">Reset</button>
         <button id="btn-refresh-rundown" class="btn secondary small" title="Refresh API Rundown">Refresh</button>
       </div>
-      <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
-        <div class="index-control" title="Current slot index for the next loaded element"
-          style="display: flex; align-items: center; gap: 8px; margin-right: 12px;">
-          <label for="current-index-input" style="margin: 0; color: var(--text-secondary);">Next Slot:</label>
-          <input type="number" id="current-index-input" value="1" min="1"
-            style="width: 50px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--panel-border); padding: 4px; border-radius: 4px; font-family: var(--font-family); margin: 0;">
+
+      <div id="top-timer-display" style="flex: 0; display: flex; justify-content: center; gap: 16px; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.3s; background: rgba(0,0,0,0.3); padding: 4px 16px; border-radius: 8px; border: 1px solid var(--panel-border); font-family: monospace; white-space: nowrap;">
+        <div style="text-align: center; line-height: 1.2;">
+          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Block Elap</div>
+          <div id="timer-block-elapsed" style="font-size: 1.2em; font-weight: bold; color: var(--accent);">00:00</div>
         </div>
-        <button id="btn-load-block" class="btn secondary small">Load Next Block</button>
+        <div style="text-align: center; line-height: 1.2;">
+          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Row Elap</div>
+          <div id="timer-elapsed" style="font-size: 1.2em; font-weight: bold; color: var(--accent);">00:00</div>
+        </div>
+        <div style="text-align: center; line-height: 1.2;">
+          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Remaining</div>
+          <div id="timer-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
+        </div>
+        <div style="text-align: center; line-height: 1.2;">
+          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Rem in Block</div>
+          <div id="timer-block-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
+        </div>
+      </div>
+
+      <div style="flex: 1; display: flex; gap: 8px; align-items: center; justify-content: flex-end;">
+        <div class="index-control" title="Current slot index for the next loaded element"
+          style="display: flex; align-items: center; gap: 8px;">
+          <label for="current-index-input" style="margin: 0; color: var(--text-secondary);">Next Slot:</label>
+          <input type="number" id="current-index-input" value="1"
+            style="width: 45px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--panel-border); padding: 4px; border-radius: 4px; font-family: var(--font-family); margin: 0; text-align: center;">
+        </div>
+        <button id="btn-load-block" class="btn secondary small">Load Block</button>
         <button id="btn-load-element" class="btn secondary small">Load Next</button>
       </div>
     </div>
@@ -165,7 +188,7 @@
 
   <div id="modal-script" class="modal">
     <div class="modal-content"
-      style="width: 80vw; height: 80vh; max-width: 1200px; max-height: 900px; display: flex; flex-direction: column;">
+      style="width: 70vw; height: 70vh; max-width: 1000px; max-height: 800px; display: flex; flex-direction: column;">
       <div class="modal-header">
         <h2 id="modal-script-title">Script</h2>
         <button class="close-btn" id="btn-close-script">&times;</button>
@@ -174,9 +197,27 @@
         <textarea id="modal-script-content"
           style="width: 100%; height: 100%; min-height: 250px; background: rgba(0,0,0,0.2); color: var(--text-primary); border: 1px solid var(--panel-border); border-radius: 4px; padding: 12px; font-family: var(--font-family); font-size: 1.1rem; line-height: 1.5; resize: none;"></textarea>
       </div>
-      <div class="modal-footer">
-        <button id="btn-cancel-script" class="btn secondary">Cancel</button>
-        <button id="btn-save-script" class="btn primary">Save Script</button>
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; text-align: left;">
+        <button id="btn-caps-script" class="btn secondary">ALL CAPS</button>
+        <div>
+          <button id="btn-cancel-script" class="btn secondary">Close</button>
+          <button id="btn-save-script" class="btn primary">Save Script</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-confirm" class="modal" style="z-index: 2000;">
+    <div class="modal-content" style="width: 400px; text-align: center;">
+      <div class="modal-body" style="padding: 24px;">
+        <h3 style="margin-bottom: 12px; color: var(--error);">Unsaved Changes</h3>
+        <p id="modal-confirm-msg" style="color: var(--text-secondary); margin-bottom: 24px; line-height: 1.5;">
+          You have unsaved changes. Are you sure you want to discard them?
+        </p>
+        <div style="display: flex; gap: 12px; justify-content: center;">
+          <button id="btn-confirm-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-confirm-ok" class="btn danger">Discard Changes</button>
+        </div>
       </div>
     </div>
   </div>
@@ -186,6 +227,14 @@
     <div class="menu-item" id="menu-mark-loaded">Mark Loaded</div>
     <div class="menu-item" id="menu-mark-unloaded">Mark Unloaded</div>
     <div class="menu-item" id="menu-mark-floated">Toggle Floated</div>
+    <div class="menu-item" id="menu-start-timer">Start On-Air Timer</div>
+    <div class="menu-divider" id="menu-divider-add"></div>
+    <div class="menu-item" id="menu-add-element-above">Add File Above</div>
+    <div class="menu-item" id="menu-add-element-below">Add File Below</div>
+    <div class="menu-item" id="menu-add-element">Add File</div>
+    <div class="menu-item" id="menu-edit-element">Edit File</div>
+    <div class="menu-divider" id="menu-divider-remove"></div>
+    <div class="menu-item" id="menu-remove-element" style="color: var(--error);">Remove File</div>
   </div>
 
   <div id="toast-container" class="toast-container"></div>

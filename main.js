@@ -20,7 +20,7 @@ ipcMain.handle('open-file', async (event, filePath) => {
   }
 });
 
-const ffprobe = require('ffprobe-static');
+const ffprobe = require('@ffprobe-installer/ffprobe');
 
 ipcMain.handle('get-video-duration', async (event, filePath) => {
   try {
@@ -46,7 +46,8 @@ function createWindow() {
       nodeIntegration: false
     },
     autoHideMenuBar: true,
-    backgroundColor: '#121212'
+    backgroundColor: '#121212',
+    icon: path.join(__dirname, 'build/icon.ico')
   });
 
   mainWindow.loadFile('index.html');
@@ -99,6 +100,28 @@ ipcMain.handle('select-directory', async () => {
   return null;
 });
 
+const validExts = ["mp4", "mov", "mxf", "mpg", "m4v", "webm", "ts", "qt", "jpg", "png", "webp", "tiff", "tif", "bmp", "heif", "mp3", "wav", "gt", "xaml"];
+
+function getExt(filename) {
+  const parts = filename.split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+}
+
+function isFileReady(filePath) {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const fd = fs.openSync(filePath, 'r+');
+    fs.closeSync(fd);
+    return true;
+  } catch (err) {
+    if (err.code === 'EBUSY' || err.code === 'EPERM') {
+      return false; // File is locked (still being exported/written)
+    }
+    // If it's read-only or another error occurs, assume it exists but cannot be written
+    return true; 
+  }
+}
+
 // File Management & Fallbacks
 function deepScanFiles(dir, fileList = []) {
   if (!fs.existsSync(dir)) return fileList;
@@ -108,7 +131,10 @@ function deepScanFiles(dir, fileList = []) {
     if (fs.statSync(filePath).isDirectory()) {
       deepScanFiles(filePath, fileList);
     } else {
-      fileList.push(filePath);
+      const ext = getExt(file);
+      if (validExts.includes(ext)) {
+        fileList.push(filePath);
+      }
     }
   }
   return fileList;
@@ -135,12 +161,7 @@ ipcMain.handle('scan-defaults-now', () => {
   return Object.keys(fallbackDictionary).length;
 });
 
-const validExts = ["mp4", "mov", "mxf", "mpg", "m4v", "webm", "ts", "qt", "jpg", "png", "webp", "tiff", "tif", "bmp", "heif", "mp3", "wav", "gt", "xaml"];
 
-function getExt(filename) {
-  const parts = filename.split('.');
-  return parts.length > 1 ? parts.pop().toLowerCase() : '';
-}
 
 ipcMain.handle('resolve-media', (event, filename) => {
   if (!filename) return null;
@@ -149,7 +170,7 @@ ipcMain.handle('resolve-media', (event, filename) => {
   
   // Check if filename is an absolute path
   if (path.isAbsolute(filename)) {
-      if (fs.existsSync(filename)) return { path: filename, isFallback: false };
+      if (isFileReady(filename)) return { path: filename, isFallback: false };
       filename = path.basename(filename);
   }
 
@@ -165,7 +186,7 @@ ipcMain.handle('resolve-media', (event, filename) => {
   if (showDir && fs.existsSync(showDir)) {
     for (const cand of candidates) {
       const showPath = path.join(showDir, cand);
-      if (fs.existsSync(showPath)) {
+      if (isFileReady(showPath)) {
         return { path: showPath, isFallback: false };
       }
     }
@@ -175,7 +196,10 @@ ipcMain.handle('resolve-media', (event, filename) => {
   for (const cand of candidates) {
     const lowerFilename = cand.toLowerCase();
     if (fallbackDictionary[lowerFilename]) {
-      return { path: fallbackDictionary[lowerFilename], isFallback: true };
+      const fallbackPath = fallbackDictionary[lowerFilename];
+      if (isFileReady(fallbackPath)) {
+        return { path: fallbackPath, isFallback: true };
+      }
     }
   }
 
@@ -188,6 +212,7 @@ ipcMain.handle('vmix-request', async (event, commandStr) => {
   try {
     const ip = store.get('vmixIP') || '127.0.0.1:8088';
     const url = `http://${ip}/API/?${commandStr}`;
+    console.log(`[${new Date().toISOString()}] [API CALL] vMix - Command: ${commandStr}`);
     const response = await fetch(url);
     const text = await response.text();
     return { success: response.ok, data: text };
@@ -216,18 +241,23 @@ ipcMain.handle('rundown-request', async (event, action, params = {}) => {
     });
 
     const url = `https://www.rundowncreator.com/${station}/API.php?${queryParams.toString()}`;
+    console.log(`[${new Date().toISOString()}] [API CALL] RundownCreator - Action: ${action} | RowID: ${params.RowID || 'N/A'}`);
     const response = await fetch(url);
+    const serverDateHeader = response.headers.get('date');
     const textData = await response.text();
     let data;
     try {
       data = JSON.parse(textData);
+      if (data && data.Error) {
+        return { success: false, error: data.Error };
+      }
     } catch (e) {
       if (textData.includes("You haven't made any changes")) {
-        return { success: true, data: { message: "No changes made." } };
+        return { success: true, data: { message: "No changes made." }, serverDate: serverDateHeader };
       }
       return { success: false, error: textData.trim() };
     }
-    return { success: true, data: data };
+    return { success: true, data: data, serverDate: serverDateHeader };
   } catch (error) {
     console.error("RundownCreator API Error:", error);
     return { success: false, error: error.message };
