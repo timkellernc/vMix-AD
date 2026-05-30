@@ -1,0 +1,247 @@
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const path = require('path');
+const Store = require('electron-store');
+const fs = require('fs');
+
+const store = new Store({
+  defaults: {
+    rundownCreatorRadioStation: '',
+    rundownCreatorAPIKey: '',
+    rundownCreatorAPIToken: '',
+    vmixIP: '127.0.0.1:8088',
+    showDirectory: '',
+    defaultsDirectory: ''
+  }
+});
+
+ipcMain.handle('open-file', async (event, filePath) => {
+  if (filePath) {
+    await shell.openPath(filePath);
+  }
+});
+
+const ffprobe = require('ffprobe-static');
+
+ipcMain.handle('get-video-duration', async (event, filePath) => {
+  try {
+    const { getVideoDurationInSeconds } = await import('get-video-duration');
+    const duration = await getVideoDurationInSeconds(filePath, ffprobe.path);
+    return duration;
+  } catch (err) {
+    fs.appendFileSync(path.join(__dirname, 'debug-log.txt'), 'Duration Error for ' + filePath + ': ' + err.message + '\n');
+    return null;
+  }
+});
+
+let mainWindow;
+let fallbackDictionary = {};
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1000,
+    height: 800,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    autoHideMenuBar: true,
+    backgroundColor: '#121212'
+  });
+
+  mainWindow.loadFile('index.html');
+}
+
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+  
+  // Scan defaults directory on startup if it exists
+  const defaultsDir = store.get('defaultsDirectory');
+  if (defaultsDir) {
+    scanDefaultsDirectory(defaultsDir);
+  }
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+// IPC Handlers
+
+// Settings
+ipcMain.handle('get-settings', () => {
+  return store.store;
+});
+
+ipcMain.handle('save-settings', (event, settings) => {
+  store.set(settings);
+  if (settings.defaultsDirectory && settings.defaultsDirectory !== store.get('defaultsDirectory')) {
+    scanDefaultsDirectory(settings.defaultsDirectory);
+  }
+  return true;
+});
+
+ipcMain.handle('select-directory', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory']
+  });
+  if (!result.canceled) {
+    return result.filePaths[0];
+  }
+  return null;
+});
+
+// File Management & Fallbacks
+function deepScanFiles(dir, fileList = []) {
+  if (!fs.existsSync(dir)) return fileList;
+  const files = fs.readdirSync(dir);
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    if (fs.statSync(filePath).isDirectory()) {
+      deepScanFiles(filePath, fileList);
+    } else {
+      fileList.push(filePath);
+    }
+  }
+  return fileList;
+}
+
+function scanDefaultsDirectory(dirPath) {
+  fallbackDictionary = {};
+  if (!dirPath || !fs.existsSync(dirPath)) return;
+  
+  const allFiles = deepScanFiles(dirPath);
+  for (const filePath of allFiles) {
+    const filename = path.basename(filePath).toLowerCase();
+    // Use the first found file for a given filename
+    if (!fallbackDictionary[filename]) {
+      fallbackDictionary[filename] = filePath;
+    }
+  }
+  console.log(`Scanned defaults. Found ${Object.keys(fallbackDictionary).length} fallback files.`);
+}
+
+ipcMain.handle('scan-defaults-now', () => {
+  const dir = store.get('defaultsDirectory');
+  scanDefaultsDirectory(dir);
+  return Object.keys(fallbackDictionary).length;
+});
+
+const validExts = ["mp4", "mov", "mxf", "mpg", "m4v", "webm", "ts", "qt", "jpg", "png", "webp", "tiff", "tif", "bmp", "heif", "mp3", "wav", "gt", "xaml"];
+
+function getExt(filename) {
+  const parts = filename.split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+}
+
+ipcMain.handle('resolve-media', (event, filename) => {
+  if (!filename) return null;
+  
+  const showDir = store.get('showDirectory');
+  
+  // Check if filename is an absolute path
+  if (path.isAbsolute(filename)) {
+      if (fs.existsSync(filename)) return { path: filename, isFallback: false };
+      filename = path.basename(filename);
+  }
+
+  const ext = getExt(filename);
+  let candidates = [];
+  if (ext) {
+    candidates.push(filename);
+  } else {
+    validExts.forEach(e => candidates.push(`${filename}.${e}`));
+  }
+
+  // 1. Check Show Directory
+  if (showDir && fs.existsSync(showDir)) {
+    for (const cand of candidates) {
+      const showPath = path.join(showDir, cand);
+      if (fs.existsSync(showPath)) {
+        return { path: showPath, isFallback: false };
+      }
+    }
+  }
+
+  // 2. Check Defaults Fallback
+  for (const cand of candidates) {
+    const lowerFilename = cand.toLowerCase();
+    if (fallbackDictionary[lowerFilename]) {
+      return { path: fallbackDictionary[lowerFilename], isFallback: true };
+    }
+  }
+
+  // 3. Not found
+  return null;
+});
+
+// vMix API Request Handler (Avoids CORS issues from frontend)
+ipcMain.handle('vmix-request', async (event, commandStr) => {
+  try {
+    const ip = store.get('vmixIP') || '127.0.0.1:8088';
+    const url = `http://${ip}/API/?${commandStr}`;
+    const response = await fetch(url);
+    const text = await response.text();
+    return { success: response.ok, data: text };
+  } catch (error) {
+    console.error("vMix Error:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Rundown Creator API Handler (Avoids CORS issues from frontend)
+ipcMain.handle('rundown-request', async (event, action, params = {}) => {
+  try {
+    const station = store.get('rundownCreatorRadioStation');
+    const apiKey = store.get('rundownCreatorAPIKey');
+    const apiToken = store.get('rundownCreatorAPIToken');
+    
+    if (!station || !apiKey || !apiToken) {
+        return { success: false, error: "Missing RundownCreator credentials in settings." };
+    }
+
+    const queryParams = new URLSearchParams({
+      APIKey: apiKey,
+      APIToken: apiToken,
+      Action: action,
+      ...params
+    });
+
+    const url = `https://www.rundowncreator.com/${station}/API.php?${queryParams.toString()}`;
+    const response = await fetch(url);
+    const textData = await response.text();
+    let data;
+    try {
+      data = JSON.parse(textData);
+    } catch (e) {
+      if (textData.includes("You haven't made any changes")) {
+        return { success: true, data: { message: "No changes made." } };
+      }
+      return { success: false, error: textData.trim() };
+    }
+    return { success: true, data: data };
+  } catch (error) {
+    console.error("RundownCreator API Error:", error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Utility to load a local CSV directly (for startup auto-load)
+ipcMain.handle('read-csv-file', async (event, filePath) => {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const content = fs.readFileSync(filePath, 'utf-8');
+    return content;
+  } catch (error) {
+    console.error("Read CSV Error:", error);
+    return null;
+  }
+});

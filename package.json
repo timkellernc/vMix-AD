@@ -1,0 +1,17 @@
+{
+  "name": "vmix-ad",
+  "version": "1.0.0",
+  "description": "vMix AD - Rundown Creator Integration",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "ffprobe-static": "^3.1.0",
+    "get-video-duration": "^5.0.0"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3"
+  }
+}

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>vMix Assistant Director</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+  <header class="top-bar">
+    <div class="logo">
+      <h1>vMix AD</h1>
+    </div>
+
+    <button id="active-rundown-title" class="btn secondary"
+      style="flex: 1; margin: 0 20px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;" title="Select Rundown">
+      Select Rundown
+    </button>
+
+    <div class="actions" style="display: flex; gap: 12px; align-items: center;">
+      <button id="btn-settings" class="btn icon-btn" title="Settings">⚙️</button>
+    </div>
+  </header>
+
+  <div class="list-header-container" style="padding: 12px 24px 0 24px;">
+    <div class="list-header"
+      style="display: flex; align-items: center; padding: 0 0 12px 0; margin-bottom: 0px; margin-right: 2px; border-bottom: 1px solid var(--panel-border);">
+      <div style="flex: 1; display: flex; gap: 12px; align-items: center;">
+        <button id="btn-init" class="btn primary small">Initialize</button>
+        <button id="btn-reset-rundown" class="btn danger small"
+          title="Reset API Rundown (Clear Loaded State)">Reset</button>
+        <button id="btn-refresh-rundown" class="btn secondary small" title="Refresh API Rundown">Refresh</button>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center; margin-left: auto;">
+        <div class="index-control" title="Current slot index for the next loaded element"
+          style="display: flex; align-items: center; gap: 8px; margin-right: 12px;">
+          <label for="current-index-input" style="margin: 0; color: var(--text-secondary);">Next Slot:</label>
+          <input type="number" id="current-index-input" value="1" min="1"
+            style="width: 50px; background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--panel-border); padding: 4px; border-radius: 4px; font-family: var(--font-family); margin: 0;">
+        </div>
+        <button id="btn-load-block" class="btn secondary small">Load Next Block</button>
+        <button id="btn-load-element" class="btn secondary small">Load Next</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="content" style="padding-top: 12px;">
+
+    <div id="rundown-list" class="rundown-list">
+      <!-- Rundown items will be injected here -->
+      <div class="empty-state">
+        <p>No rundown loaded. Fetch from API or Load CSV.</p>
+        <p class="drag-hint">You can also drag and drop media files here.</p>
+      </div>
+    </div>
+  </main>
+
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button id="btn-close-settings" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="settings-group">
+          <h3>RundownCreator API</h3>
+          <label>
+            Station / Channel ID:
+            <input type="text" id="setting-station" placeholder="e.g. dirtvision">
+          </label>
+          <label>
+            API Key:
+            <input type="text" id="setting-apikey" placeholder="Your API Key">
+          </label>
+          <label>
+            API Token:
+            <input type="password" id="setting-apitoken" placeholder="Your API Token">
+          </label>
+        </div>
+
+        <div class="settings-group">
+          <h3>Directories</h3>
+          <label>
+            Show Directory (Today's Media):
+            <div class="input-with-btn">
+              <input type="text" id="setting-showdir" readonly>
+              <button id="btn-select-showdir" class="btn small">Browse</button>
+            </div>
+          </label>
+          <label>
+            Defaults / Generics Folder:
+            <div class="input-with-btn">
+              <input type="text" id="setting-defaultsdir" readonly>
+              <button id="btn-select-defaultsdir" class="btn small">Browse</button>
+            </div>
+          </label>
+          <button id="btn-scan-defaults" class="btn secondary small mt-2">Scan Defaults Now</button>
+          <span id="scan-result" class="text-hint"></span>
+        </div>
+
+        <div class="settings-group">
+          <h3>vMix Import Settings</h3>
+          <label>
+            vMix IP & Port:
+            <input type="text" id="setting-vmixip" value="127.0.0.1:8088">
+          </label>
+          <label>
+            Input Name Prefix:
+            <input type="text" id="setting-prefix" value="Video">
+          </label>
+          <label>
+            First Input Location (Move to):
+            <input type="number" id="setting-firstloc" value="9">
+          </label>
+          <label>
+            Block / Pool Size:
+            <input type="number" id="setting-poolsize" value="15">
+          </label>
+          <label style="margin-top: 12px; margin-bottom: 4px;">Default Audio Buses (On):</label>
+          <div id="setting-audio-buses" style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="M"> M</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="A" checked> A</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="B" checked> B</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="C"> C</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="D"> D</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="E"> E</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="F"> F</label>
+            <label style="display:inline; margin-bottom:0;"><input type="checkbox" value="G"> G</label>
+          </div>
+          <label style="display: flex; align-items: center; gap: 8px; margin-top: 12px; cursor: pointer;">
+            <input type="checkbox" id="setting-protect-program" checked>
+            Protect Active Program Input (Smart Slot Recycling)
+          </label>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-settings" class="btn primary">Save & Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-rundowns" class="modal">
+    <div class="modal-content" style="width: 400px;">
+      <div class="modal-header">
+        <h2>Select Rundown</h2>
+        <button class="close-btn" id="btn-close-rundowns">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label>Available Rundowns:</label>
+        <select id="select-rundown" style="margin-bottom: 20px;"></select>
+
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--panel-border); padding-top: 16px; margin-top: 8px;">
+          <button id="btn-load-csv" class="btn secondary small">Load CSV Backup</button>
+          <button id="btn-load-rundown" class="btn primary">Load Selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-script" class="modal">
+    <div class="modal-content"
+      style="width: 80vw; height: 80vh; max-width: 1200px; max-height: 900px; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <h2 id="modal-script-title">Script</h2>
+        <button class="close-btn" id="btn-close-script">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y: hidden; flex: 1; padding-bottom: 0;">
+        <textarea id="modal-script-content"
+          style="width: 100%; height: 100%; min-height: 250px; background: rgba(0,0,0,0.2); color: var(--text-primary); border: 1px solid var(--panel-border); border-radius: 4px; padding: 12px; font-family: var(--font-family); font-size: 1.1rem; line-height: 1.5; resize: none;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-cancel-script" class="btn secondary">Cancel</button>
+        <button id="btn-save-script" class="btn primary">Save Script</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="context-menu" class="context-menu hidden">
+    <div class="menu-item" id="menu-mark-prev-loaded">Mark Previous Loaded</div>
+    <div class="menu-item" id="menu-mark-loaded">Mark Loaded</div>
+    <div class="menu-item" id="menu-mark-unloaded">Mark Unloaded</div>
+    <div class="menu-item" id="menu-mark-floated">Toggle Floated</div>
+  </div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="renderer.js"></script>
+</body>
+
+</html>

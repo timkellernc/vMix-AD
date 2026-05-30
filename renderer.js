@@ -1,0 +1,1219 @@
+// DOM Elements
+const rundownList = document.getElementById('rundown-list');
+const btnSettings = document.getElementById('btn-settings');
+const btnCloseSettings = document.getElementById('btn-close-settings');
+const btnSaveSettings = document.getElementById('btn-save-settings');
+const modalSettings = document.getElementById('settings-modal');
+
+const btnRefreshRundown = document.getElementById('btn-refresh-rundown');
+const btnResetRundown = document.getElementById('btn-reset-rundown');
+const btnLoadCsv = document.getElementById('btn-load-csv');
+
+const btnSelectShowdir = document.getElementById('btn-select-showdir');
+const btnSelectDefaultsdir = document.getElementById('btn-select-defaultsdir');
+const btnScanDefaults = document.getElementById('btn-scan-defaults');
+const activeRundownTitle = document.getElementById('active-rundown-title');
+
+const modalRundowns = document.getElementById('modal-rundowns');
+const btnCloseRundowns = document.getElementById('btn-close-rundowns');
+const selectRundown = document.getElementById('select-rundown');
+const btnLoadRundown = document.getElementById('btn-load-rundown');
+
+const modalScript = document.getElementById('modal-script');
+const btnCloseScript = document.getElementById('btn-close-script');
+const modalScriptTitle = document.getElementById('modal-script-title');
+const modalScriptContent = document.getElementById('modal-script-content');
+const btnSaveScript = document.getElementById('btn-save-script');
+const btnCancelScript = document.getElementById('btn-cancel-script');
+
+let activeScriptItem = null;
+let originalScriptText = '';
+
+// Context Menu
+const contextMenu = document.getElementById('context-menu');
+const menuMarkPrevLoaded = document.getElementById('menu-mark-prev-loaded');
+const menuMarkLoaded = document.getElementById('menu-mark-loaded');
+const menuMarkUnloaded = document.getElementById('menu-mark-unloaded');
+const menuMarkFloated = document.getElementById('menu-mark-floated');
+let activeContextMenuRow = null;
+
+// Batch Actions
+const inCurrentIndex = document.getElementById('current-index-input');
+const btnInit = document.getElementById('btn-init');
+const btnLoadBlock = document.getElementById('btn-load-block');
+const btnLoadElement = document.getElementById('btn-load-element');
+
+// Settings Inputs
+const inStation = document.getElementById('setting-station');
+const inApiKey = document.getElementById('setting-apikey');
+const inApiToken = document.getElementById('setting-apitoken');
+const inShowdir = document.getElementById('setting-showdir');
+const inDefaultsdir = document.getElementById('setting-defaultsdir');
+const inVmixip = document.getElementById('setting-vmixip');
+const inPrefix = document.getElementById('setting-prefix');
+const inFirstLoc = document.getElementById('setting-firstloc');
+const inPoolSize = document.getElementById('setting-poolsize');
+const inProtectProgram = document.getElementById('setting-protect-program');
+const scanResult = document.getElementById('scan-result');
+
+let globalParsedItems = []; // Store parsed items to support batch loading
+let vmixActionQueue = Promise.resolve();
+let globalSlotMap = {}; // Maps slotIndex -> item object currently in that slot
+
+function enqueueVmixAction(actionFn) {
+  vmixActionQueue = vmixActionQueue.then(() => actionFn()).catch(err => console.error(err));
+}
+
+// File Extensions
+const videoExts = ["mp4", "mov", "mxf", "mpg", "m4v", "webm", "ts", "qt"];
+const imageExts = ["jpg", "png", "webp", "tiff", "tif", "bmp", "heif"];
+const audioExts = ["mp3", "wav"];
+const titleExts = ["gt", "xaml"];
+
+// Initialize
+async function init(isStartup = false) {
+  const settings = await window.api.getSettings();
+  inStation.value = settings.rundownCreatorRadioStation || '';
+  inApiKey.value = settings.rundownCreatorAPIKey || '';
+  inApiToken.value = settings.rundownCreatorAPIToken || '';
+  inShowdir.value = settings.showDirectory || '';
+  inDefaultsdir.value = settings.defaultsDirectory || '';
+  inVmixip.value = settings.vmixIP || '127.0.0.1:8088';
+  inPrefix.value = settings.inputPrefix || 'Video';
+  inFirstLoc.value = settings.firstInputLocation || 9;
+  inPoolSize.value = settings.poolSize || 15;
+  inProtectProgram.checked = settings.protectProgram !== false; // Default to true
+
+  const defaultBuses = settings.audioBuses || ['A', 'B'];
+  const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]');
+  busCheckboxes.forEach(cb => {
+    cb.checked = defaultBuses.includes(cb.value);
+  });
+
+  // Auto-load last loaded API rundown only on startup
+  if (isStartup && settings.lastRundownId) {
+    loadApiRundown(settings.lastRundownId, true, settings.lastRundownTitle);
+  }
+}
+
+// Modal Logic
+btnSettings.addEventListener('click', () => {
+  init(); // reload current settings
+  modalSettings.classList.add('visible');
+});
+
+btnCloseSettings.addEventListener('click', () => {
+  modalSettings.classList.remove('visible');
+});
+
+btnCloseScript.addEventListener('click', () => {
+  modalScript.classList.remove('visible');
+  activeScriptItem = null;
+});
+
+btnCancelScript.addEventListener('click', () => {
+  modalScript.classList.remove('visible');
+  activeScriptItem = null;
+});
+
+btnSaveScript.addEventListener('click', async () => {
+  if (!activeScriptItem || !activeScriptItem.rowId) return;
+
+  const newText = modalScriptContent.value;
+  btnSaveScript.innerText = "Saving...";
+  btnSaveScript.disabled = true;
+
+  try {
+    const payload = { 
+      RowID: activeScriptItem.rowId, 
+      Script: newText 
+    };
+
+    payload.ReadRate = (activeScriptItem.readRate !== undefined && activeScriptItem.readRate !== null) ? activeScriptItem.readRate : 15;
+    payload.ActualDuration = (activeScriptItem.actualDuration !== undefined && activeScriptItem.actualDuration !== null) ? activeScriptItem.actualDuration : 0;
+
+    const res = await window.api.rundownRequest('saveScript', payload);
+
+    if (res.success) {
+      // Update local memory so we don't need to re-fetch
+      activeScriptItem.script = newText;
+      modalScript.classList.remove('visible');
+      showToast(`Script saved for ${activeScriptItem.slug}`, 'success');
+    } else {
+      showToast("Error saving script: " + (res.error || "Unknown API error"));
+    }
+  } catch (err) {
+    showToast("Network Error saving script: " + err.message);
+  } finally {
+    btnSaveScript.innerText = "Save Script";
+    btnSaveScript.disabled = true;
+    originalScriptText = activeScriptItem ? activeScriptItem.script : '';
+  }
+});
+
+modalScriptContent.addEventListener('input', () => {
+  btnSaveScript.disabled = modalScriptContent.value === originalScriptText;
+});
+
+// Close modals when clicking the dark backdrop
+window.addEventListener('click', (e) => {
+  if (e.target.classList.contains('modal')) {
+    e.target.classList.remove('visible');
+    if (e.target.id === 'modal-script') activeScriptItem = null;
+  }
+});
+
+btnSaveSettings.addEventListener('click', async () => {
+  const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]:checked');
+  const selectedBuses = Array.from(busCheckboxes).map(cb => cb.value);
+
+  const settings = {
+    rundownCreatorRadioStation: inStation.value,
+    rundownCreatorAPIKey: inApiKey.value,
+    rundownCreatorAPIToken: inApiToken.value,
+    showDirectory: inShowdir.value,
+    defaultsDirectory: inDefaultsdir.value,
+    vmixIP: inVmixip.value,
+    inputPrefix: inPrefix.value,
+    firstInputLocation: parseInt(inFirstLoc.value) || 9,
+    poolSize: parseInt(inPoolSize.value) || 15,
+    protectProgram: inProtectProgram.checked,
+    audioBuses: selectedBuses
+  };
+  await window.api.saveSettings(settings);
+  modalSettings.classList.remove('visible');
+});
+
+btnSelectShowdir.addEventListener('click', async () => {
+  const dir = await window.api.selectDirectory();
+  if (dir) inShowdir.value = dir;
+});
+
+btnSelectDefaultsdir.addEventListener('click', async () => {
+  const dir = await window.api.selectDirectory();
+  if (dir) inDefaultsdir.value = dir;
+});
+
+btnScanDefaults.addEventListener('click', async () => {
+  scanResult.innerText = "Scanning...";
+  // Save settings first so backend knows the dir
+  await window.api.saveSettings({ defaultsDirectory: inDefaultsdir.value });
+  const count = await window.api.scanDefaultsNow();
+  scanResult.innerText = `Found ${count} fallback files.`;
+});
+
+function getExt(filename) {
+  const parts = filename.split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+}
+
+function formatDuration(sec) {
+  if (isNaN(sec) || sec === null || sec === undefined) return '0:00';
+  sec = parseInt(sec);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function parseDuration(val) {
+  if (!val) return 0;
+  val = val.toString().trim();
+  if (val.includes(':')) {
+    const parts = val.split(':');
+    const m = parseInt(parts[0]) || 0;
+    const s = parseInt(parts[1]) || 0;
+    return (m * 60) + s;
+  }
+  return parseInt(val) || 0;
+}
+
+function showToast(message, type = 'error') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  
+  let iconHtml = '';
+  if (type === 'success') {
+    iconHtml = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+      </svg>
+    `;
+  } else {
+    iconHtml = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
+    `;
+  }
+
+  toast.innerHTML = `
+    ${iconHtml}
+    <span>${message}</span>
+  `;
+  container.appendChild(toast);
+  
+  setTimeout(() => {
+    toast.classList.add('hiding');
+    toast.addEventListener('animationend', () => toast.remove());
+  }, 4000);
+}
+
+async function getVmixActiveSlotTitle() {
+  try {
+    const res = await window.api.vmixRequest('');
+    if (!res.success) return null;
+    
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(res.data, "text/xml");
+    const activeNode = doc.querySelector('active');
+    if (!activeNode) return null;
+    
+    const activeNumber = activeNode.textContent;
+    const inputNode = doc.querySelector(`input[number="${activeNumber}"]`);
+    if (inputNode) {
+      return inputNode.getAttribute('title');
+    }
+  } catch (err) {
+    console.error("Failed to parse vMix active slot:", err);
+  }
+  return null;
+}
+
+// vMix Execution
+async function sendToVmix(item, slotIndex) {
+  // Clear any previous item from tracking if it was in this slot
+  const prevItem = globalSlotMap[slotIndex];
+  if (prevItem && prevItem !== item) {
+    prevItem.loadedSlot = null;
+    prevItem.isPlaceholderLoaded = false;
+  }
+  globalSlotMap[slotIndex] = item;
+  item.loadedSlot = slotIndex;
+  
+  let targetPath = item.resolvedPath;
+  let isPlaceholder = false;
+  
+  if (!targetPath) {
+    if (!item.requestedFile) return; // Completely empty row, should never happen here
+    isPlaceholder = true;
+    item.isPlaceholderLoaded = true;
+    let appDir = decodeURIComponent(window.location.pathname.substring(1));
+    appDir = appDir.substring(0, appDir.lastIndexOf('/'));
+    targetPath = appDir + '/placeholder.png';
+  } else {
+    item.isPlaceholderLoaded = false;
+  }
+
+  const ext = isPlaceholder ? 'png' : getExt(item.originalFile);
+  let type = "Video";
+  if (imageExts.includes(ext) || isPlaceholder) type = "Image";
+  else if (audioExts.includes(ext)) type = "AudioFile";
+  else if (titleExts.includes(ext)) type = "Title";
+
+  const prefix = inPrefix.value || 'Video';
+  const firstLoc = parseInt(inFirstLoc.value) || 9;
+  const inputName = `${prefix} ${slotIndex}`;
+  
+  // Audio configuration
+  const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]');
+  let audioCmds = [];
+  busCheckboxes.forEach(cb => {
+    if (cb.checked) {
+      audioCmds.push(`Function=AudioBusOn&Value=${cb.value}&Input=${inputName}`);
+    } else {
+      audioCmds.push(`Function=AudioBusOff&Value=${cb.value}&Input=${inputName}`);
+    }
+  });
+
+  // 1. Clear old input
+  await window.api.vmixRequest(`Function=RemoveInput&Input=${inputName}`);
+  
+  // 2. Add new input
+  await window.api.vmixRequest(`Function=AddInput&Value=${type}|${targetPath}`);
+  
+  // 3. Rename input
+  // vMix automatically names a newly added file input exactly after its filename.
+  // We must target that exact initial filename to successfully rename it to Video X.
+  const initialInputName = isPlaceholder ? 'placeholder.png' : item.originalFile;
+  await window.api.vmixRequest(`Function=SetInputName&Value=${inputName}&Input=${initialInputName}`);
+
+  // 4. Run routing and audio commands concurrently for speed
+  const parallelCmds = [
+    `Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${inputName}`,
+    ...audioCmds,
+    `Function=AudioAutoOff&Input=${inputName}`
+  ];
+
+  await Promise.all(parallelCmds.map(cmd => window.api.vmixRequest(cmd)));
+  
+  item.isLoaded = true;
+}
+
+// Drag and drop support
+rundownList.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  rundownList.style.borderColor = 'var(--accent)';
+});
+
+rundownList.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  rundownList.style.borderColor = 'transparent';
+});
+
+rundownList.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  rundownList.style.borderColor = 'transparent';
+  
+  const files = e.dataTransfer.files;
+  if (!files || files.length === 0) return;
+
+  const newItems = [];
+  for (const file of files) {
+    const ext = getExt(file.name);
+    if (![...videoExts, ...imageExts, ...audioExts, ...titleExts].includes(ext)) continue;
+
+    newItems.push({
+      page: '',
+      slug: file.name.toUpperCase(),
+      segment: '',
+      originalFile: file.name,
+      resolvedPath: file.path, // Absolute path from drag-and-drop
+      isFallback: false
+    });
+  }
+
+  if (newItems.length > 0) {
+    newItems.forEach(item => {
+      appendRowItem(item);
+    });
+  }
+});
+
+let itemCount = 0;
+function appendRowItem(item) {
+  const empty = rundownList.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  itemCount++;
+  
+  const row = document.createElement('div');
+  row.className = 'row-item';
+  row.id = `row-item-${itemCount}`;
+  
+  if (item.isFloated) row.classList.add('floated');
+  if (item.isBreak) row.classList.add('break');
+  if (!item.originalFile) row.classList.add('no-media');
+
+  let fallbackHtml = '';
+  if (item.isFallback) {
+    fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
+  }
+
+  const displayFile = item.isFallback ? `${item.originalFile} (Defaults)` : item.originalFile;
+  const resolvedPath = item.resolvedPath;
+
+  const durationSpanId = `duration-${itemCount}`;
+
+  row.innerHTML = `
+    <div class="row-index">${itemCount}</div>
+    <div class="row-page">${item.page || ''}</div>
+    <div class="row-title" title="${item.slug} ${item.segment}">${item.slug} ${item.segment || ''}</div>
+    <div class="row-file" title="${resolvedPath || ''}">
+      ${displayFile || ''}
+      <span id="${durationSpanId}" class="row-duration"></span>
+      ${fallbackHtml}
+    </div>
+    <div class="row-actions">
+      <input type="text" class="row-est-duration" value="${formatDuration(item.estDuration)}" title="Est. Duration (click to edit)" />
+      <button class="btn primary small btn-run">Load</button>
+    </div>
+  `;
+
+  const btnRun = row.querySelector('.btn-run');
+  const rowFile = row.querySelector('.row-file');
+
+  if (resolvedPath) {
+    rowFile.addEventListener('click', () => {
+      window.api.openFile(resolvedPath);
+    });
+  }
+
+  if (item.isLoaded) {
+    row.classList.add('loaded', 'sent');
+    if (item.isPlaceholderLoaded) {
+      row.classList.add('placeholder-loaded');
+    }
+    btnRun.innerText = "Loaded";
+    btnRun.classList.remove('primary');
+    btnRun.classList.add('success');
+  } else if (!resolvedPath) {
+    btnRun.disabled = true;
+    btnRun.style.opacity = '0.5';
+    btnRun.innerText = "Missing";
+  }
+
+  btnRun.addEventListener('click', () => {
+    if (btnRun.innerText === "Sending...") return;
+    
+    enqueueVmixAction(async () => {
+      btnRun.innerText = "Sending...";
+      const slotToUse = parseInt(inCurrentIndex.value) || 1;
+      
+      // Program Protection Check
+      if (inProtectProgram.checked) {
+        const activeTitle = await getVmixActiveSlotTitle();
+        const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
+        if (activeTitle && activeTitle === targetTitle) {
+          btnRun.innerText = "Load";
+          showToast(`Load Aborted: <strong>${targetTitle}</strong> is currently LIVE on Program!`);
+          return;
+        }
+      }
+
+      await sendToVmix(item, slotToUse);
+      
+      // Update visual state
+      row.classList.add('sent', 'loaded');
+      if (item.isPlaceholderLoaded) {
+        row.classList.add('placeholder-loaded');
+      } else {
+        row.classList.remove('placeholder-loaded');
+      }
+      btnRun.innerText = "Loaded";
+      btnRun.classList.remove('primary');
+      btnRun.classList.add('success');
+      // Increment index and wrap
+      let nextSlot = slotToUse + 1;
+      const poolSize = parseInt(inPoolSize.value) || 15;
+      if (nextSlot > poolSize) nextSlot = 1;
+      inCurrentIndex.value = nextSlot;
+    });
+  });
+
+  const estInput = row.querySelector('.row-est-duration');
+  if (estInput) {
+    const processDurationUpdate = async () => {
+      const parsedSecs = parseDuration(estInput.value);
+      if (parsedSecs !== item.estDuration) {
+        if (item.rowId) {
+          try {
+            const res = await window.api.rundownRequest('setRowProperties', {
+              RowID: item.rowId,
+              EstimatedDuration: parsedSecs
+            });
+            if (!res.success) {
+              showToast("Error updating duration on server: " + (res.error || "Unknown error"));
+              estInput.value = formatDuration(item.estDuration); // revert
+              return;
+            }
+          } catch (err) {
+            showToast("Network Error updating duration: " + err.message);
+            estInput.value = formatDuration(item.estDuration); // revert
+            return;
+          }
+        }
+        item.estDuration = parsedSecs;
+      }
+      estInput.value = formatDuration(item.estDuration);
+    };
+
+    estInput.addEventListener('blur', processDurationUpdate);
+    estInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        estInput.blur(); // Triggers blur which calls processDurationUpdate
+      }
+    });
+    estInput.addEventListener('focus', () => {
+      // Small timeout ensures the browser's default click-to-place-cursor
+      // doesn't instantly deselect the text we just highlighted.
+      setTimeout(() => estInput.select(), 10);
+    });
+  }
+
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    activeContextMenuRow = row;
+    contextMenu.style.left = `${e.pageX}px`;
+    contextMenu.style.top = `${e.pageY}px`;
+    contextMenu.classList.remove('hidden');
+  });
+
+  row.addEventListener('dblclick', async () => {
+    activeScriptItem = item;
+    
+    if (item.script && item.script.trim().length > 0) {
+      // We already have the script (e.g., from CSV)
+      modalScriptTitle.innerText = `${item.slug} ${item.segment || ''} - Script`;
+      modalScriptContent.value = item.script;
+      originalScriptText = item.script;
+      btnSaveScript.disabled = true;
+      modalScript.classList.add('visible');
+    } else if (item.rowId) {
+      // Fetch from API
+      modalScriptTitle.innerText = `${item.slug} ${item.segment || ''} - Script`;
+      modalScriptContent.value = 'Loading script from RundownCreator...';
+      modalScript.classList.add('visible');
+      
+      try {
+        let res = await window.api.rundownRequest('getScript', { RowID: item.rowId });
+        if (res.success && res.data) {
+          let scriptContent = '';
+          let dataObj = Array.isArray(res.data) ? res.data[0] : res.data;
+          
+          if (!dataObj) {
+            scriptContent = '';
+          } else {
+             if (dataObj.ReadRate !== undefined) activeScriptItem.readRate = dataObj.ReadRate;
+             if (dataObj.ActualDuration !== undefined) activeScriptItem.actualDuration = dataObj.ActualDuration;
+
+             if (typeof dataObj === 'string') {
+               scriptContent = dataObj;
+             } else if (dataObj.Script !== undefined) {
+               scriptContent = dataObj.Script || '';
+             } else if (dataObj.Body !== undefined) {
+               scriptContent = dataObj.Body || '';
+             } else {
+               scriptContent = JSON.stringify(dataObj);
+             }
+          }
+          modalScriptContent.value = scriptContent;
+          originalScriptText = scriptContent;
+          btnSaveScript.disabled = true;
+        } else {
+          modalScriptContent.value = 'Error loading script or script is empty.';
+          originalScriptText = '';
+          btnSaveScript.disabled = true;
+        }
+      } catch(e) {
+        modalScriptContent.value = 'Network Error: ' + e.message;
+      }
+    } else {
+      showToast('No script available for this item.');
+    }
+  });
+
+  // Fetch duration asynchronously using native HTML5 video
+  if (resolvedPath && displayFile && resolvedPath.match(/\.(mp4|mov|webm|mkv)$/i)) {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      if (duration && !isNaN(duration)) {
+        const mins = Math.floor(duration / 60);
+        const secs = Math.floor(duration % 60).toString().padStart(2, '0');
+        const span = document.getElementById(durationSpanId);
+        if (span) span.innerText = `[${mins}:${secs}]`;
+      }
+    };
+    // Ensure Windows paths are properly formatted for file:// URIs
+    video.src = `file:///${resolvedPath.replace(/\\/g, '/')}`;
+  }
+
+  rundownList.appendChild(row);
+}
+
+function renderRows(items) {
+  globalParsedItems = items;
+  rundownList.innerHTML = '';
+  itemCount = 0;
+  if (items.length === 0) {
+    rundownList.innerHTML = '<div class="empty-state"><p>No items found.</p></div>';
+    return;
+  }
+  items.forEach(appendRowItem);
+}
+
+// Batch Functions
+async function processBatch(count, limitToSegment = false) {
+  const poolSize = parseInt(inPoolSize.value) || 15;
+  let itemsSent = 0;
+  let targetSegment = null;
+
+  for (let i = 0; i < globalParsedItems.length; i++) {
+    const item = globalParsedItems[i];
+    
+    if (itemsSent >= count) break;
+    // Missing items (!item.resolvedPath) are NOW allowed to proceed if they have a requested file!
+    if (item.isFloated || item.isLoaded || item.isLoading || (!item.resolvedPath && !item.requestedFile)) continue;
+
+    // Segment logic
+    if (limitToSegment) {
+      // Extract block letter from page (e.g., "A1" -> "A"), fallback to segment
+      const getBlockLetter = (item) => {
+        const match = (item.page || '').match(/^[a-zA-Z]+/);
+        return match ? match[0].toUpperCase() : item.segment;
+      };
+      
+      const itemBlock = getBlockLetter(item);
+
+      if (targetSegment === null) {
+        targetSegment = itemBlock;
+      } else if (itemBlock !== targetSegment) {
+        break; // Stop if block changes
+      }
+    }
+
+    item.isLoading = true; // Mark instantly to prevent concurrent double-loads
+    const slotToUse = parseInt(inCurrentIndex.value) || 1;
+    
+    // Find DOM button to update UI
+    const row = document.getElementById(`row-item-${i + 1}`);
+    const btn = row ? row.querySelector('.btn-run') : null;
+    
+    // Program Protection Check
+    if (inProtectProgram.checked) {
+      const activeTitle = await getVmixActiveSlotTitle();
+      const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
+      if (activeTitle && activeTitle === targetTitle) {
+        item.isLoading = false;
+        if (btn) btn.innerText = "Load";
+        showToast(`Batch Aborted: <strong>${targetTitle}</strong> is currently LIVE on Program!`);
+        break; // Stop the entire batch load
+      }
+    }
+
+    if (btn) btn.innerText = "Sending...";
+
+    await sendToVmix(item, slotToUse);
+    item.isLoading = false;
+
+    if (row) {
+      row.classList.add('sent', 'loaded');
+      if (item.isPlaceholderLoaded) {
+        row.classList.add('placeholder-loaded');
+      } else {
+        row.classList.remove('placeholder-loaded');
+      }
+      if (btn) {
+        btn.innerText = "Loaded";
+        btn.classList.remove('primary');
+        btn.classList.add('success');
+      }
+    }
+
+    let nextSlot = slotToUse + 1;
+    if (nextSlot > poolSize) nextSlot = 1; // Wrap around
+    inCurrentIndex.value = nextSlot;
+
+    itemsSent++;
+  }
+}
+
+btnInit.addEventListener('click', () => {
+  enqueueVmixAction(async () => {
+    btnInit.disabled = true;
+    
+    // 1. Mark all as unloaded first
+    globalParsedItems.forEach(item => {
+      item.isLoaded = false;
+      item.isLoading = false;
+    });
+    
+    const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
+    allRows.forEach(row => {
+      row.classList.remove('loaded', 'sent');
+      const btn = row.querySelector('.btn-run');
+      if (btn && (btn.innerText === "Sent" || btn.innerText === "Loaded")) {
+        btn.innerText = "Load";
+        btn.classList.remove('success');
+        btn.classList.add('primary');
+      }
+    });
+
+    // 2. Load like it currently does
+    inCurrentIndex.value = 1; // Always start at 1 for Initialize
+    const poolSize = parseInt(inPoolSize.value) || 15;
+    await processBatch(poolSize, false);
+    btnInit.disabled = false;
+  });
+});
+
+btnLoadBlock.addEventListener('click', () => {
+  enqueueVmixAction(async () => {
+    btnLoadBlock.disabled = true;
+    const poolSize = parseInt(inPoolSize.value) || 15;
+    await processBatch(poolSize, true); // true = limit to segment
+    btnLoadBlock.disabled = false;
+  });
+});
+
+btnLoadElement.addEventListener('click', () => {
+  enqueueVmixAction(async () => {
+    await processBatch(1, false);
+  });
+});
+
+// Keyboard Shortcuts
+document.addEventListener('keydown', (e) => {
+  // Ignore if user is typing in an input or textarea
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+    return;
+  }
+  
+  if (e.code === 'Space') {
+    e.preventDefault(); // Prevent page scroll
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Cmd + Space -> Load Next Block
+      btnLoadBlock.click();
+    } else {
+      // Space -> Load Next
+      btnLoadElement.click();
+    }
+  } else if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    btnRefreshRundown.click();
+  }
+});
+
+// Missing Media Auto-Scanner (every 5 seconds)
+setInterval(async () => {
+  if (globalParsedItems.length === 0) return;
+  
+  for (let i = 0; i < globalParsedItems.length; i++) {
+    const item = globalParsedItems[i];
+    
+    // Scan items that explicitly requested a file, but are currently missing OR using a Fallback
+    if (!item.requestedFile || (item.resolvedPath && !item.isFallback)) continue;
+
+    const searchName = item.requestedFile;
+    const mediaInfo = await window.api.resolveMedia(searchName);
+    
+    // If we found media, and it's either NOT a fallback (so we found the real one), 
+    // OR we were completely missing before (so finding a fallback is still an upgrade)
+    if (mediaInfo && (!mediaInfo.isFallback || !item.resolvedPath)) {
+      // It was found! Update the item
+      item.resolvedPath = mediaInfo.path;
+      item.originalFile = mediaInfo.path.split(/[\\/]/).pop();
+      item.isFallback = mediaInfo.isFallback;
+      
+      const row = document.getElementById(`row-item-${i + 1}`);
+      if (row) {
+        row.classList.remove('no-media');
+        const rowFile = row.querySelector('.row-file');
+        
+        let fallbackHtml = '';
+        if (item.isFallback) {
+          fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
+        }
+        
+        const displayFile = item.isFallback ? `${item.originalFile} (Defaults)` : item.originalFile;
+        const durationSpanId = `duration-${i + 1}`;
+        
+        if (rowFile) {
+          rowFile.innerHTML = `
+            ${displayFile}
+            <span id="${durationSpanId}" class="row-duration"></span>
+            ${fallbackHtml}
+          `;
+          rowFile.title = item.resolvedPath;
+          rowFile.onclick = () => window.api.openFile(item.resolvedPath);
+        }
+        
+        const btnRun = row.querySelector('.btn-run');
+        if (btnRun) {
+          btnRun.disabled = false;
+          btnRun.style.opacity = '1';
+          btnRun.innerText = "Load";
+        }
+        
+        // Fetch duration
+        if (item.resolvedPath.match(/\.(mp4|mov|webm|mkv)$/i)) {
+          const video = document.createElement('video');
+          video.preload = 'metadata';
+          video.onloadedmetadata = () => {
+            const duration = video.duration;
+            if (duration && !isNaN(duration)) {
+              const mins = Math.floor(duration / 60);
+              const secs = Math.floor(duration % 60).toString().padStart(2, '0');
+              const span = document.getElementById(durationSpanId);
+              if (span) span.innerText = `[${mins}:${secs}]`;
+            }
+          };
+          video.src = `file:///${item.resolvedPath.replace(/\\/g, '/')}`;
+        }
+        
+        // Auto-Replace in vMix if it was loaded as a placeholder!
+        if (item.isPlaceholderLoaded && item.loadedSlot) {
+          // It's currently playing/loaded in vMix as a black frame. Replace it!
+          enqueueVmixAction(async () => {
+            if (!row) return;
+            const runBtn = row.querySelector('.btn-run');
+            if (runBtn) runBtn.innerText = "Replacing...";
+            
+            await sendToVmix(item, item.loadedSlot);
+            
+            // Re-update visual state
+            if (runBtn) {
+              row.classList.remove('placeholder-loaded');
+              runBtn.innerText = "Loaded";
+              runBtn.classList.remove('primary');
+              runBtn.classList.add('success');
+            }
+          });
+        }
+      }
+    }
+  }
+}, 5000);
+
+// Rundown Selection Modal Logic
+btnCloseRundowns.addEventListener('click', () => {
+  modalRundowns.classList.remove('visible');
+});
+
+// API Fetching
+activeRundownTitle.addEventListener('click', async () => {
+  const previousTitle = activeRundownTitle.innerText;
+  activeRundownTitle.innerText = "Fetching...";
+  try {
+    let res = await window.api.rundownRequest('getRundowns');
+    if (!res.success) throw new Error(res.error);
+    if (!res.data || res.data.length === 0) throw new Error("No rundowns found.");
+
+    selectRundown.innerHTML = '';
+    let activeRundowns = res.data.filter(rd => rd.Archived !== 1 && rd.Template !== 1);
+    
+    // Sort by newest first (descending Start timestamp)
+    activeRundowns.sort((a, b) => b.Start - a.Start);
+
+    if (activeRundowns.length === 0) {
+      throw new Error("No active (unarchived) rundowns found.");
+    }
+
+    activeRundowns.forEach(rd => {
+      const option = document.createElement('option');
+      option.value = rd.RundownID;
+      option.innerText = rd.Title || rd.RundownID;
+      selectRundown.appendChild(option);
+    });
+
+    modalRundowns.classList.add('visible');
+
+  } catch (err) {
+    console.error("Error fetching rundowns:", err);
+    selectRundown.innerHTML = '<option value="">Offline / Error - Use CSV Backup</option>';
+    modalRundowns.classList.add('visible');
+  } finally {
+    activeRundownTitle.innerText = previousTitle;
+  }
+});
+
+async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '') {
+  if (!rundownId) return;
+
+  if (rundownTitle) {
+    activeRundownTitle.innerText = rundownTitle;
+  } else {
+    activeRundownTitle.innerText = rundownId;
+  }
+
+  const contentDiv = document.querySelector('.content');
+  const scrollPos = preserveState && contentDiv ? contentDiv.scrollTop : 0;
+
+  const loadedKeys = new Set();
+  const placeholderMap = new Map();
+  if (preserveState) {
+    globalParsedItems.filter(i => i.isLoaded).forEach(i => {
+      const key = `${i.page}|${i.slug}|${i.originalFile}`;
+      loadedKeys.add(key);
+      if (i.isPlaceholderLoaded) {
+        placeholderMap.set(key, i.loadedSlot);
+      }
+    });
+  }
+
+  modalRundowns.classList.remove('visible');
+  rundownList.innerHTML = '<div class="empty-state"><p>Loading rundown rows...</p></div>';
+
+  try {
+    inCurrentIndex.value = 1; // Reset when fetching a different rundown
+    let res = await window.api.rundownRequest('getRows', { RundownID: rundownId });
+    if (!res.success) throw new Error(res.error);
+
+    const rows = res.data;
+    const parsedItems = [];
+
+    for (const row of rows) {
+      const fileField = row.file || row.source || ''; 
+      const slugField = row.StorySlug || '';
+      const scriptField = row.Script || row.Body || row.StoryBody || '';
+      const rowIdField = row.RowID || row.ID || row.id || '';
+      
+      if (!fileField && !slugField) continue;
+
+      const fileNames = fileField.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      const isFloated = row.Floated === 1 || row.Floated === "1" || row.Floated === true;
+      const estDur = parseInt(row.EstimatedDuration || row.Duration) || 0;
+      const pageStr = row.PageNumber ? String(row.PageNumber).trim() : '';
+      const isBreak = /^[A-Za-z]+0$/.test(pageStr);
+      
+      if (!fileNames || fileNames.length === 0) {
+          const key = `${pageStr}|${slugField}|`;
+          const wasLoaded = preserveState && loadedKeys.has(key);
+          const pSlot = preserveState ? placeholderMap.get(key) : undefined;
+          parsedItems.push({
+            page: row.PageNumber,
+            slug: slugField,
+            segment: row.segment || '',
+            script: scriptField,
+            rowId: rowIdField,
+            estDuration: estDur,
+            requestedFile: '', // Nothing was requested
+            originalFile: '',
+            resolvedPath: null,
+            isFallback: false,
+            isFloated: isFloated,
+            isLoaded: wasLoaded,
+            isPlaceholderLoaded: pSlot !== undefined,
+            loadedSlot: pSlot !== undefined ? pSlot : null,
+            isBreak: isBreak
+          });
+      } else {
+        for (const f of fileNames) {
+          let searchName = f.trim();
+          
+          const mediaInfo = await window.api.resolveMedia(searchName);
+          
+          const originalFile = mediaInfo ? mediaInfo.path.split(/[\\/]/).pop() : searchName;
+          const key = `${pageStr}|${slugField}|${originalFile}`;
+          const wasLoaded = preserveState && loadedKeys.has(key);
+          const pSlot = preserveState ? placeholderMap.get(key) : undefined;
+          
+          parsedItems.push({
+            page: row.PageNumber,
+            slug: slugField,
+            segment: row.segment || '',
+            script: scriptField,
+            rowId: rowIdField,
+            estDuration: estDur,
+            requestedFile: searchName, // Store what they actually wanted
+            originalFile: originalFile, // What we ended up giving them (or the original if missing)
+            resolvedPath: mediaInfo ? mediaInfo.path : null,
+            isFallback: mediaInfo ? mediaInfo.isFallback : false,
+            isFloated: isFloated,
+            isLoaded: wasLoaded,
+            isPlaceholderLoaded: pSlot !== undefined,
+            loadedSlot: pSlot !== undefined ? pSlot : null,
+            isBreak: isBreak
+          });
+        }
+      }
+    }
+
+    renderRows(parsedItems);
+
+    if (preserveState && contentDiv) {
+      requestAnimationFrame(() => {
+        contentDiv.scrollTop = scrollPos;
+      });
+    }
+
+    // Save as last loaded rundown
+    await window.api.saveSettings({ lastRundownId: rundownId, lastRundownTitle: rundownTitle });
+
+  } catch (err) {
+    alert("Error fetching rows: " + err.message);
+    rundownList.innerHTML = '<div class="empty-state"><p>Error fetching rows.</p></div>';
+  }
+}
+
+btnLoadRundown.addEventListener('click', async () => {
+  const option = selectRundown.options[selectRundown.selectedIndex];
+  const title = option ? option.innerText : selectRundown.value;
+  await loadApiRundown(selectRundown.value, false, title);
+});
+
+btnRefreshRundown.addEventListener('click', async () => {
+  const settings = await window.api.getSettings();
+  if (settings.lastRundownId) {
+    await loadApiRundown(settings.lastRundownId, true, settings.lastRundownTitle);
+  } else {
+    alert("No API rundown is currently loaded. Use 'Select Rundown' first.");
+  }
+});
+
+btnResetRundown.addEventListener('click', async () => {
+  const settings = await window.api.getSettings();
+  if (settings.lastRundownId) {
+    await loadApiRundown(settings.lastRundownId, false, settings.lastRundownTitle);
+  } else {
+    alert("No API rundown is currently loaded. Use 'Select Rundown' first.");
+  }
+});
+
+// CSV Loading Backup (Using HTML5 FileReader)
+btnLoadCsv.addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    activeRundownTitle.innerText = file.name;
+    modalRundowns.classList.remove('visible'); // Close modal if open
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target.result;
+      const lines = text.split('\n');
+      if (lines.length < 2) return;
+
+      const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+      const slugIdx = headers.indexOf('Story Slug');
+      const fileIdx = headers.indexOf('Source') > -1 ? headers.indexOf('Source') : 8; // fallback column
+      const pageIdx = headers.indexOf('Page');
+      const segmentIdx = headers.indexOf('Segment');
+      const typeIdx = headers.indexOf('Type');
+      const scriptIdx = headers.findIndex(h => h.toLowerCase() === 'script' || h.toLowerCase() === 'body');
+
+      inCurrentIndex.value = 1; // Reset on CSV load
+      const parsedItems = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const cols = line.split(','); 
+        
+        if (cols.length > Math.max(slugIdx, fileIdx)) {
+          const slug = slugIdx > -1 ? cols[slugIdx].replace(/"/g, '') : '';
+          const fileField = fileIdx > -1 ? cols[fileIdx].replace(/"/g, '') : '';
+          const page = pageIdx > -1 ? cols[pageIdx].replace(/"/g, '') : '';
+          const segment = segmentIdx > -1 ? cols[segmentIdx].replace(/"/g, '') : '';
+          const type = typeIdx > -1 ? cols[typeIdx].replace(/"/g, '') : '';
+          const script = scriptIdx > -1 ? cols[scriptIdx].replace(/"/g, '') : '';
+
+          if (!slug && !fileField) continue;
+
+          const fileNames = fileField.split(';')
+            .map(f => f.trim())
+            .filter(f => f.length > 0);
+
+          const isBreak = /^[A-Za-z]+0$/.test(page);
+          
+          if (fileNames.length === 0) {
+            parsedItems.push({ page, slug, segment, script, requestedFile: '', originalFile: '', resolvedPath: null, isFallback: false, isFloated: false, isLoaded: false, isBreak });
+          } else {
+            for (const f of fileNames) {
+              let searchName = f.trim();
+              const mediaInfo = await window.api.resolveMedia(searchName);
+              parsedItems.push({
+                page, slug, segment, script,
+                requestedFile: searchName,
+                originalFile: mediaInfo ? mediaInfo.path.split(/[\\/]/).pop() : searchName,
+                resolvedPath: mediaInfo ? mediaInfo.path : null,
+                isFallback: mediaInfo ? mediaInfo.isFallback : false,
+                isFloated: false,
+                isLoaded: false,
+                isBreak
+              });
+            }
+          }
+        }
+      }
+      renderRows(parsedItems);
+
+      // Clear auto-load memory since we switched to a CSV backup
+      await window.api.saveSettings({ lastRundownId: null, lastRundownTitle: null });
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+});
+
+// Context Menu Actions
+document.addEventListener('click', () => {
+  contextMenu.classList.add('hidden');
+});
+
+menuMarkPrevLoaded.addEventListener('click', () => {
+  if (!activeContextMenuRow) return;
+  const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
+  const targetIndex = allRows.indexOf(activeContextMenuRow);
+  if (targetIndex > -1) {
+    for (let i = 0; i <= targetIndex; i++) {
+      allRows[i].classList.add('loaded', 'sent');
+      if (globalParsedItems[i]) globalParsedItems[i].isLoaded = true;
+      const btn = allRows[i].querySelector('.btn-run');
+      if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+        btn.innerText = "Loaded";
+        btn.classList.remove('primary');
+        btn.classList.add('success');
+      }
+    }
+  }
+});
+
+menuMarkLoaded.addEventListener('click', () => {
+  if (!activeContextMenuRow) return;
+  const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
+  const targetIndex = allRows.indexOf(activeContextMenuRow);
+  if (targetIndex > -1 && globalParsedItems[targetIndex]) globalParsedItems[targetIndex].isLoaded = true;
+  
+  activeContextMenuRow.classList.add('loaded', 'sent');
+  const btn = activeContextMenuRow.querySelector('.btn-run');
+  if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+    btn.innerText = "Loaded";
+    btn.classList.remove('primary');
+    btn.classList.add('success');
+  }
+});
+
+menuMarkUnloaded.addEventListener('click', () => {
+  if (!activeContextMenuRow) return;
+  const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
+  const targetIndex = allRows.indexOf(activeContextMenuRow);
+  if (targetIndex > -1 && globalParsedItems[targetIndex]) {
+    globalParsedItems[targetIndex].isLoaded = false;
+    globalParsedItems[targetIndex].isLoading = false;
+  }
+
+  activeContextMenuRow.classList.remove('loaded', 'sent');
+  const btn = activeContextMenuRow.querySelector('.btn-run');
+  if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+    btn.innerText = "Load";
+    btn.classList.remove('success');
+    btn.classList.add('primary');
+  }
+});
+
+menuMarkFloated.addEventListener('click', async () => {
+  if (!activeContextMenuRow) return;
+  const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
+  const targetIndex = allRows.indexOf(activeContextMenuRow);
+  if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
+  
+  const item = globalParsedItems[targetIndex];
+  const newFloatedState = !item.isFloated;
+  
+  if (item.rowId) {
+    try {
+      const res = await window.api.rundownRequest('setRowProperties', {
+        RowID: item.rowId,
+        Floated: newFloatedState ? "true" : "false"
+      });
+      if (!res.success) {
+        showToast("Error toggling floated state on server: " + (res.error || "Unknown error"));
+        return;
+      }
+    } catch (err) {
+      showToast("Network Error toggling floated: " + err.message);
+      return;
+    }
+  }
+
+  item.isFloated = newFloatedState;
+  
+  if (newFloatedState) {
+    activeContextMenuRow.classList.add('floated');
+  } else {
+    activeContextMenuRow.classList.remove('floated');
+  }
+});
+
+init(true);
