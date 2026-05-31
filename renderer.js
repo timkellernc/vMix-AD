@@ -35,6 +35,7 @@ const contextMenu = document.getElementById('context-menu');
 const menuMarkPrevLoaded = document.getElementById('menu-mark-prev-loaded');
 const menuMarkLoaded = document.getElementById('menu-mark-loaded');
 const menuMarkUnloaded = document.getElementById('menu-mark-unloaded');
+const menuMarkFutureUnloaded = document.getElementById('menu-mark-future-unloaded');
 const menuMarkFloated = document.getElementById('menu-mark-floated');
 const menuStartTimer = document.getElementById('menu-start-timer');
 const menuAddElement = document.getElementById('menu-add-element');
@@ -399,13 +400,17 @@ async function sendToVmix(item, slotIndex) {
         if (entry) {
           entry.classList.remove('placeholder-loaded');
           const btn = entry.querySelector('.btn-run');
-          if (btn && btn.innerText === "Searching...") {
-            btn.innerText = "Skipped";
-            btn.classList.remove('success', 'primary');
-            btn.style.borderColor = 'var(--text-secondary)';
-            btn.style.color = 'var(--text-secondary)';
-            btn.style.backgroundColor = 'var(--panel-bg)';
-            btn.style.animation = 'none'; // Stop pulsing
+          if (btn) {
+            if (btn.innerText === "Searching...") {
+              btn.innerText = "Skipped";
+              btn.classList.remove('success', 'primary');
+              btn.style.borderColor = 'var(--text-secondary)';
+              btn.style.color = 'var(--text-secondary)';
+              btn.style.backgroundColor = 'var(--panel-bg)';
+              btn.style.animation = 'none'; // Stop pulsing
+            } else if (btn.innerText.startsWith("Loaded [")) {
+              btn.innerText = "Loaded";
+            }
           }
         }
       }
@@ -772,7 +777,7 @@ function appendRowItem(item, insertBeforeNode = null) {
       entry.classList.add('loaded', 'sent');
       if (fileObj.isPlaceholderLoaded) entry.classList.add('placeholder-loaded');
       if (btnRun) {
-        btnRun.innerText = "Loaded";
+        btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : (fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded");
         btnRun.classList.remove('primary');
         btnRun.classList.add('success');
       }
@@ -818,7 +823,7 @@ function appendRowItem(item, insertBeforeNode = null) {
               btnRun.innerText = "Searching...";
             } else {
               entry.classList.remove('placeholder-loaded');
-              btnRun.innerText = "Loaded";
+              btnRun.innerText = fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded";
             }
             btnRun.classList.remove('primary');
             btnRun.classList.add('success');
@@ -1040,23 +1045,6 @@ async function processBatch(count, limitToSegment = false) {
   for (let i = 0; i < globalParsedItems.length; i++) {
     const item = globalParsedItems[i];
 
-    // Segment logic
-    if (limitToSegment) {
-      // Extract block letter from page (e.g., "A1" -> "A"), fallback to segment
-      const getBlockLetter = (item) => {
-        const match = (item.page || '').match(/^[a-zA-Z]+/);
-        return match ? match[0].toUpperCase() : item.segment;
-      };
-
-      const itemBlock = getBlockLetter(item);
-
-      if (targetSegment === null) {
-        targetSegment = itemBlock;
-      } else if (itemBlock !== targetSegment) {
-        break; // Stop if block changes
-      }
-    }
-
     if (!item.files || item.files.length === 0) continue;
 
     for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
@@ -1064,6 +1052,21 @@ async function processBatch(count, limitToSegment = false) {
 
       if (itemsSent >= count) return;
       if (item.isFloated || fileObj.isLoaded || fileObj.isLoading || (!fileObj.resolvedPath && !fileObj.requestedFile)) continue;
+
+      // Segment logic - lock targetSegment to the first valid unloaded item we find
+      if (limitToSegment) {
+        const getBlockLetter = (item) => {
+          const match = (item.page || '').match(/^[a-zA-Z]+/);
+          return match ? match[0].toUpperCase() : item.segment;
+        };
+        const itemBlock = getBlockLetter(item);
+
+        if (targetSegment === null) {
+          targetSegment = itemBlock;
+        } else if (itemBlock !== targetSegment) {
+          return; // Stop the batch if block changes
+        }
+      }
 
       fileObj.isLoading = true; // Mark instantly to prevent concurrent double-loads
       const slotToUse = parseInt(inCurrentIndex.value) || 1;
@@ -1104,7 +1107,7 @@ async function processBatch(count, limitToSegment = false) {
           entry.classList.remove('placeholder-loaded');
         }
         if (btn) {
-          btn.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : "Loaded";
+          btn.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : (fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded");
           btn.classList.remove('primary');
           btn.classList.add('success');
           btn.style.borderColor = '';
@@ -1299,7 +1302,7 @@ async function pollMissingMedia() {
                   if (runBtn) {
                     entry.classList.remove('placeholder-loaded');
                     fileObj.isPlaceholderLoaded = false;
-                    runBtn.innerText = "Loaded";
+                    runBtn.innerText = fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded";
                     runBtn.classList.remove('primary');
                     runBtn.classList.add('success');
                   }
@@ -1376,7 +1379,9 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
   const scrollPos = preserveState && contentDiv ? contentDiv.scrollTop : 0;
 
   const loadedKeys = new Set();
-  const placeholderMap = new Map();
+  const placeholderKeys = new Set();
+  const slotMap = new Map();
+
   if (preserveState) {
     globalParsedItems.forEach(i => {
       const pageStr = i.page ? String(i.page).trim() : '';
@@ -1384,12 +1389,15 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
 
       if (i.files) {
         i.files.forEach(f => {
+          const key = `${pageStr}|${i.slug}|${f.originalFile}`;
           if (f.isLoaded) {
-            const key = `${pageStr}|${i.slug}|${f.originalFile}`;
             loadedKeys.add(key);
-            if (f.isPlaceholderLoaded) {
-              placeholderMap.set(key, f.loadedSlot);
-            }
+          }
+          if (f.isPlaceholderLoaded) {
+            placeholderKeys.add(key);
+          }
+          if (f.loadedSlot !== null && f.loadedSlot !== undefined) {
+            slotMap.set(key, f.loadedSlot);
           }
         });
       }
@@ -1429,10 +1437,10 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
       if (!fileField && !slugField) continue;
 
       const fileNames = fileField.split(',').map(s => s.trim()).filter(s => s.length > 0);
-      const isFloated = row.Floated === 1 || row.Floated === "1" || row.Floated === true;
+      const isFloated = row.Floated === 1 || String(row.Floated) === "1" || String(row.Floated).toLowerCase() === 'true';
       const estDur = parseInt(row.EstimatedDuration || row.Duration) || 0;
       const pageStr = row.PageNumber ? String(row.PageNumber).trim() : '';
-      const isBreak = /^[A-Za-z]+0$/.test(pageStr);
+      const isBreak = /^[A-Za-z]+0$/.test(pageStr) || String(row.Type).toLowerCase() === 'break' || slugField.toUpperCase().includes('BREAK');
 
       let filesArray = [];
 
@@ -1446,7 +1454,8 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
 
           const fileKey = `${pageStr}|${slugField}|${originalFile}`;
           const fileWasLoaded = preserveState && loadedKeys.has(fileKey);
-          const filePSlot = preserveState ? placeholderMap.get(fileKey) : undefined;
+          const fileWasPlaceholder = preserveState && placeholderKeys.has(fileKey);
+          const fileSlot = preserveState ? slotMap.get(fileKey) : undefined;
 
           filesArray.push({
             requestedFile: searchName,
@@ -1455,8 +1464,8 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
             isFallback: mediaInfo ? mediaInfo.isFallback : false,
             isCustom: false,
             isLoaded: fileWasLoaded,
-            isPlaceholderLoaded: filePSlot !== undefined,
-            loadedSlot: filePSlot !== undefined ? filePSlot : null
+            isPlaceholderLoaded: fileWasPlaceholder,
+            loadedSlot: fileSlot !== undefined ? fileSlot : null
           });
         }
       }
@@ -1893,6 +1902,62 @@ menuMarkUnloaded.addEventListener('click', () => {
           btn.innerText = "Load";
           btn.classList.remove('success');
           btn.classList.add('primary');
+        }
+      }
+    }
+  }
+});
+
+menuMarkFutureUnloaded.addEventListener('click', () => {
+  if (!activeContextMenuRow) return;
+  const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
+  const targetIndex = allRows.indexOf(activeContextMenuRow);
+  if (targetIndex > -1) {
+    for (let i = targetIndex; i < allRows.length; i++) {
+      const gItem = globalParsedItems[i];
+      if (gItem && gItem.files && gItem.files.length > 0) {
+        if (i === targetIndex && activeContextMenuFileIndex !== -1) {
+          for (let fIdx = activeContextMenuFileIndex; fIdx < gItem.files.length; fIdx++) {
+            if (gItem.files[fIdx]) {
+              gItem.files[fIdx].isLoaded = false;
+              gItem.files[fIdx].isLoading = false;
+              gItem.files[fIdx].isPlaceholderLoaded = false;
+              const entry = allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`);
+              if (entry) {
+                entry.classList.remove('loaded', 'sent', 'placeholder-loaded');
+                const btn = entry.querySelector('.btn-run');
+                if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+                  btn.innerText = "Load";
+                  btn.classList.remove('success');
+                  btn.classList.add('primary');
+                }
+              }
+            }
+          }
+          if (gItem.files.every(f => !f.isLoaded)) {
+            gItem.isLoaded = false;
+            allRows[i].classList.remove('loaded', 'sent');
+          }
+        } else {
+          gItem.isLoaded = false;
+          gItem.isLoading = false;
+          gItem.files.forEach(f => {
+            f.isLoaded = false;
+            f.isLoading = false;
+            f.isPlaceholderLoaded = false;
+          });
+
+          allRows[i].classList.remove('loaded', 'sent');
+          const entries = allRows[i].querySelectorAll('.file-entry');
+          entries.forEach(e => {
+            e.classList.remove('loaded', 'sent', 'placeholder-loaded');
+            const btn = e.querySelector('.btn-run');
+            if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+              btn.innerText = "Load";
+              btn.classList.remove('success');
+              btn.classList.add('primary');
+            }
+          });
         }
       }
     }
