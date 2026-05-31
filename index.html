@@ -11,16 +11,19 @@
 <body>
 
   <header class="top-bar">
-    <div class="logo" style="flex: 1; display: flex; justify-content: flex-start;">
-      <h1>vMix AD</h1>
+    <div class="logo" style="flex: 0 0 auto; display: flex; justify-content: flex-start;">
+      <h1 id="top-clock-display" style="font-family: monospace; font-size: clamp(1rem, 2vw, 1.5rem); letter-spacing: 1px; white-space: nowrap; margin: 0;">00:00:00 AM</h1>
     </div>
 
-    <div style="flex: 2; display: flex; justify-content: center; padding: 0 20px; overflow: hidden;">
+    <div
+      style="flex: 5; display: flex; justify-content: center; align-items: center; gap: 12px; padding: 0 20px; overflow: hidden;">
       <button id="active-rundown-title" class="btn secondary"
-        style="width: 100%; max-width: 600px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;"
+        style="width: 100%; max-width: 400px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;"
         title="Select Rundown">
         Select Rundown
       </button>
+      <button id="btn-reset-rundown" class="btn danger small" title="Reset Rundown to Default States">Reset</button>
+      <button id="btn-refresh-rundown" class="btn secondary small" title="Sync with Rundown Creator">Refresh</button>
     </div>
 
     <div class="actions" style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-end;">
@@ -31,30 +34,37 @@
   <div class="list-header-container" style="padding: 12px 24px 0 24px;">
     <div class="list-header"
       style="display: flex; align-items: center; padding: 0 0 12px 0; margin-bottom: 0px; margin-right: 2px; border-bottom: 1px solid var(--panel-border);">
-      <div style="flex: 1; display: flex; gap: 12px; align-items: center;">
-        <button id="btn-init" class="btn primary small">Initialize</button>
-        <button id="btn-reset-rundown" class="btn danger small"
-          title="Reset API Rundown (Clear Loaded State)">Reset</button>
-        <button id="btn-refresh-rundown" class="btn secondary small" title="Refresh API Rundown">Refresh</button>
-      </div>
 
-      <div id="top-timer-display" style="flex: 0; display: flex; justify-content: center; gap: 16px; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.3s; background: rgba(0,0,0,0.3); padding: 4px 16px; border-radius: 8px; border: 1px solid var(--panel-border); font-family: monospace; white-space: nowrap;">
-        <div style="text-align: center; line-height: 1.2;">
-          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Block Elap</div>
-          <div id="timer-block-elapsed" style="font-size: 1.2em; font-weight: bold; color: var(--accent);">00:00</div>
+      <div id="top-timer-display"
+        style="flex: 0; display: flex; justify-content: flex-start; gap: 16px; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.3s; background: rgba(0,0,0,0.3); padding: 4px 16px; border-radius: 8px; border: 1px solid var(--panel-border); font-family: monospace; white-space: nowrap;">
+        
+        <div id="timer-live-content" style="display: flex; gap: 16px; align-items: center;">
+          <div style="text-align: center; line-height: 1.2;">
+            <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Block Elap</div>
+            <div id="timer-block-elapsed" style="font-size: 1.2em; font-weight: bold; color: var(--accent);">00:00</div>
+          </div>
+          <div style="text-align: center; line-height: 1.2;">
+            <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Row Elap</div>
+            <div id="timer-elapsed" style="font-size: 1.2em; font-weight: bold; color: var(--accent);">00:00</div>
+          </div>
+          <div style="text-align: center; line-height: 1.2;">
+            <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Remaining</div>
+            <div id="timer-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
+          </div>
+          <div style="text-align: center; line-height: 1.2;">
+            <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Rem in Block</div>
+            <div id="timer-block-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
+          </div>
+          <div style="text-align: center; line-height: 1.2; border-left: 1px solid var(--panel-border); padding-left: 16px;">
+            <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Over / Under</div>
+            <div id="timer-on-over" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">--:--</div>
+          </div>
         </div>
-        <div style="text-align: center; line-height: 1.2;">
-          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Row Elap</div>
-          <div id="timer-elapsed" style="font-size: 1.2em; font-weight: bold; color: var(--accent);">00:00</div>
+
+        <div id="timer-idle-content" style="display: none; align-items: center; justify-content: center; width: 100%;">
+          <div id="timer-idle-text" style="font-size: 1.2em; font-weight: bold; color: var(--text-secondary); letter-spacing: 0.5px;"></div>
         </div>
-        <div style="text-align: center; line-height: 1.2;">
-          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Remaining</div>
-          <div id="timer-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
-        </div>
-        <div style="text-align: center; line-height: 1.2;">
-          <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Rem in Block</div>
-          <div id="timer-block-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
-        </div>
+
       </div>
 
       <div style="flex: 1; display: flex; gap: 8px; align-items: center; justify-content: flex-end;">
@@ -66,11 +76,27 @@
         </div>
         <button id="btn-load-block" class="btn secondary small">Load Block</button>
         <button id="btn-load-element" class="btn secondary small">Load Next</button>
+        <button id="btn-init" class="btn primary small" title="Load in first files to vMix">Initialize</button>
       </div>
     </div>
   </div>
 
   <main class="content" style="padding-top: 12px;">
+
+    <div class="rundown-headers"
+      style="display: flex; align-items: center; padding: 0 4px 6px 12px; color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--panel-border); margin-bottom: 8px;">
+      <div style="width: 40px;">Idx</div>
+      <div style="width: 50px;">Page</div>
+      <div style="flex: 3;">Slug / Segment</div>
+      <div style="flex: 4;">
+        <div style="padding: 4px 8px; margin: 2px 0; border: 1px solid transparent;">Media Files</div>
+      </div>
+      <div style="display: flex; gap: 8px; margin-left: 8px;">
+        <div style="width: 60px; text-align: center;">Est.</div>
+        <div style="width: 95px; text-align: center;">Front</div>
+        <div style="width: 95px; text-align: center;">Back</div>
+      </div>
+    </div>
 
     <div id="rundown-list" class="rundown-list">
       <!-- Rundown items will be injected here -->
@@ -160,6 +186,14 @@
           </label>
         </div>
 
+        <div class="settings-group">
+          <h3>Display Settings</h3>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="setting-use-24hr">
+            Use 24-Hour Time (Front & Back Times)
+          </label>
+        </div>
+
       </div>
       <div class="modal-footer">
         <button id="btn-save-settings" class="btn primary">Save & Close</button>
@@ -197,7 +231,8 @@
         <textarea id="modal-script-content"
           style="width: 100%; height: 100%; min-height: 250px; background: rgba(0,0,0,0.2); color: var(--text-primary); border: 1px solid var(--panel-border); border-radius: 4px; padding: 12px; font-family: var(--font-family); font-size: 1.1rem; line-height: 1.5; resize: none;"></textarea>
       </div>
-      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; text-align: left;">
+      <div class="modal-footer"
+        style="display: flex; justify-content: space-between; align-items: center; text-align: left;">
         <button id="btn-caps-script" class="btn secondary">ALL CAPS</button>
         <div>
           <button id="btn-cancel-script" class="btn secondary">Close</button>

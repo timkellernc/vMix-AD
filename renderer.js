@@ -68,6 +68,7 @@ const inPrefix = document.getElementById('setting-prefix');
 const inFirstLoc = document.getElementById('setting-firstloc');
 const inPoolSize = document.getElementById('setting-poolsize');
 const inProtectProgram = document.getElementById('setting-protect-program');
+const inUse24Hr = document.getElementById('setting-use-24hr');
 const scanResult = document.getElementById('scan-result');
 
 let globalParsedItems = []; // Store parsed items to support batch loading
@@ -78,9 +79,23 @@ let activeRundownId = null;
 let timerPollTimeout = null;
 let activeOnAirRowId = null;
 let activeOnAirStartDate = null;
+let activeRundownStartTime = null;
+let activeRundownEndTime = null;
 let serverTimeOffsetMs = 0;
 let timerIgnoreApiUpdatesUntil = 0;
 let blockEarliestRowData = {};
+
+let isWindowFocused = true;
+let lastScrolledRowId = null;
+
+window.addEventListener('focus', () => {
+  isWindowFocused = true;
+});
+
+window.addEventListener('blur', () => {
+  isWindowFocused = false;
+  lastScrolledRowId = null; // Force snap on next tick
+});
 
 function enqueueVmixAction(actionFn) {
   vmixActionQueue = vmixActionQueue.then(() => actionFn()).catch(err => console.error(err));
@@ -105,6 +120,7 @@ async function init(isStartup = false) {
   inFirstLoc.value = settings.firstInputLocation || 9;
   inPoolSize.value = settings.poolSize || 15;
   inProtectProgram.checked = settings.protectProgram !== false; // Default to true
+  inUse24Hr.checked = settings.use24Hr === true; // Default to false (12hr)
 
   const defaultBuses = settings.audioBuses || ['A', 'B'];
   const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]');
@@ -186,9 +202,9 @@ btnSaveScript.addEventListener('click', async () => {
   btnSaveScript.disabled = true;
 
   try {
-    const payload = { 
-      RowID: activeScriptItem.rowId, 
-      Script: newText 
+    const payload = {
+      RowID: activeScriptItem.rowId,
+      Script: newText
     };
 
     payload.ReadRate = (activeScriptItem.readRate !== undefined && activeScriptItem.readRate !== null) ? activeScriptItem.readRate : 15;
@@ -251,9 +267,14 @@ btnSaveSettings.addEventListener('click', async () => {
     firstInputLocation: parseInt(inFirstLoc.value) || 9,
     poolSize: parseInt(inPoolSize.value) || 15,
     protectProgram: inProtectProgram.checked,
+    use24Hr: inUse24Hr.checked,
     audioBuses: selectedBuses
   };
   await window.api.saveSettings(settings);
+
+  // Immediately re-render rows to apply time format changes
+  renderRows(globalParsedItems);
+
   modalSettings.classList.remove('visible');
 });
 
@@ -304,7 +325,7 @@ function showToast(message, type = 'error') {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  
+
   let iconHtml = '';
   if (type === 'success') {
     iconHtml = `
@@ -328,7 +349,7 @@ function showToast(message, type = 'error') {
     <span>${message}</span>
   `;
   container.appendChild(toast);
-  
+
   setTimeout(() => {
     toast.classList.add('hiding');
     toast.addEventListener('animationend', () => toast.remove());
@@ -339,12 +360,12 @@ async function getVmixActiveSlotTitle() {
   try {
     const res = await window.api.vmixRequest('');
     if (!res.success) return null;
-    
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(res.data, "text/xml");
     const activeNode = doc.querySelector('active');
     if (!activeNode) return null;
-    
+
     const activeNumber = activeNode.textContent;
     const inputNode = doc.querySelector(`input[number="${activeNumber}"]`);
     if (inputNode) {
@@ -363,13 +384,13 @@ async function sendToVmix(item, slotIndex) {
   if (prevItem && prevItem !== item) {
     prevItem.loadedSlot = null;
     prevItem.isPlaceholderLoaded = false;
-    
+
     // Clear the source file object state too
     if (prevItem._sourceFileObj) {
       prevItem._sourceFileObj.loadedSlot = null;
       prevItem._sourceFileObj.isPlaceholderLoaded = false;
     }
-    
+
     // Update the DOM to "Skipped" if it was "Searching..."
     if (prevItem._sourceRowId && prevItem._sourceFileIndex !== undefined) {
       const row = document.getElementById(prevItem._sourceRowId);
@@ -383,6 +404,7 @@ async function sendToVmix(item, slotIndex) {
             btn.classList.remove('success', 'primary');
             btn.style.borderColor = 'var(--text-secondary)';
             btn.style.color = 'var(--text-secondary)';
+            btn.style.backgroundColor = 'var(--panel-bg)';
             btn.style.animation = 'none'; // Stop pulsing
           }
         }
@@ -391,10 +413,10 @@ async function sendToVmix(item, slotIndex) {
   }
   globalSlotMap[slotIndex] = item;
   item.loadedSlot = slotIndex;
-  
+
   let targetPath = item.resolvedPath;
   let isPlaceholder = false;
-  
+
   if (!targetPath) {
     if (!item.requestedFile) return; // Completely empty row, should never happen here
     isPlaceholder = true;
@@ -415,7 +437,7 @@ async function sendToVmix(item, slotIndex) {
   const prefix = inPrefix.value || 'Video';
   const firstLoc = parseInt(inFirstLoc.value) || 9;
   const inputName = `${prefix} ${slotIndex}`;
-  
+
   // Audio configuration
   const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]');
   let audioCmds = [];
@@ -429,10 +451,10 @@ async function sendToVmix(item, slotIndex) {
 
   // 1. Clear old input
   await window.api.vmixRequest(`Function=RemoveInput&Input=${inputName}`);
-  
+
   // 2. Add new input
   await window.api.vmixRequest(`Function=AddInput&Value=${type}|${targetPath}`);
-  
+
   // 3. Rename input
   // vMix automatically names a newly added file input exactly after its filename.
   // We must target that exact initial filename to successfully rename it to Video X.
@@ -447,7 +469,7 @@ async function sendToVmix(item, slotIndex) {
   ];
 
   await Promise.all(parallelCmds.map(cmd => window.api.vmixRequest(cmd)));
-  
+
   item.isLoaded = true;
 }
 
@@ -465,29 +487,77 @@ rundownList.addEventListener('dragleave', (e) => {
 rundownList.addEventListener('drop', async (e) => {
   e.preventDefault();
   rundownList.style.borderColor = 'transparent';
-  
+
   const files = e.dataTransfer.files;
   if (!files || files.length === 0) return;
 
-  const newItems = [];
-  for (const file of files) {
-    const ext = getExt(file.name);
-    if (![...videoExts, ...imageExts, ...audioExts, ...titleExts].includes(ext)) continue;
+  const targetRowNode = e.target.closest('.row-item');
+  if (!targetRowNode) return; // Only allow dropping onto existing rows
 
-    newItems.push({
-      page: '',
-      slug: file.name.toUpperCase(),
-      segment: '',
-      originalFile: file.name,
-      resolvedPath: file.path, // Absolute path from drag-and-drop
-      isFallback: false
-    });
-  }
+  const rowIdMatch = targetRowNode.id.match(/^row-item-(\d+)$/);
+  if (rowIdMatch) {
+    const rowIndex = parseInt(rowIdMatch[1], 10) - 1;
+    const item = globalParsedItems[rowIndex];
+    if (item) {
+      if (!item.files) item.files = [];
+      let added = false;
 
-  if (newItems.length > 0) {
-    newItems.forEach(item => {
-      appendRowItem(item);
-    });
+      for (const file of files) {
+        const ext = getExt(file.name);
+        if (![...videoExts, ...imageExts, ...audioExts, ...titleExts].includes(ext)) continue;
+
+        let reqFile = file.path;
+
+        const normalizeDir = (d) => {
+          if (!d) return '';
+          let nd = d.trim().replace(/\//g, '\\');
+          if (!nd.endsWith('\\')) nd += '\\';
+          return nd;
+        };
+
+        const showDir = normalizeDir(inShowdir.value);
+        const defDir = normalizeDir(inDefaultsdir.value);
+        const fPath = file.path.replace(/\//g, '\\');
+        const fPathLower = fPath.toLowerCase();
+
+        if (showDir && fPathLower.startsWith(showDir.toLowerCase())) {
+          reqFile = fPath.substring(showDir.length);
+        } else if (defDir && fPathLower.startsWith(defDir.toLowerCase())) {
+          reqFile = fPath.substring(defDir.length);
+        }
+
+        item.files.push({
+          requestedFile: reqFile,
+          originalFile: file.name,
+          resolvedPath: file.path,
+          isFallback: false,
+          isCustom: false
+        });
+        added = true;
+      }
+
+      if (added) {
+        const nextNode = targetRowNode.nextSibling;
+        targetRowNode.remove();
+        appendRowItem(item, nextNode);
+
+        const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
+        allDOMRows.forEach((rowNode, idx) => {
+          rowNode.id = `row-item-${idx + 1}`;
+          const indexDiv = rowNode.querySelector('.row-index');
+          if (indexDiv) indexDiv.innerText = idx + 1;
+        });
+        itemCount = allDOMRows.length;
+
+        // Restore On-Air highlight if it was the active row
+        if (activeOnAirRowId && String(item.rowId) === String(activeOnAirRowId)) {
+          const newRow = document.getElementById(`row-item-${rowIndex + 1}`);
+          if (newRow) newRow.classList.add('on-air');
+        }
+
+        syncRowFilesToServer(item);
+      }
+    }
   }
 });
 
@@ -496,24 +566,24 @@ async function syncRowFilesToServer(item) {
   try {
     const rowsRes = await window.api.rundownRequest('getRows', { RundownID: activeRundownId });
     if (!rowsRes.success) throw new Error(rowsRes.error);
-    
+
     const targetRow = rowsRes.data.find(r => String(r.RowID) === String(item.rowId) || String(r.ID) === String(item.rowId) || String(r.id) === String(item.rowId));
     if (!targetRow) throw new Error("Anchor row not found on server.");
-    
+
     const colsRes = await window.api.rundownRequest('getColumns');
     if (!colsRes.success) throw new Error(colsRes.error);
-    
+
     const targetCol = colsRes.data.find(c => c.Name_Remapped === 'source') || colsRes.data.find(c => c.Name_Remapped === 'file');
     if (!targetCol) throw new Error("Could not determine Source column ID.");
-    
+
     const orderedFileNames = (item.files || []).map(f => f.requestedFile || f.originalFile).filter(f => f && f.trim().length > 0);
     const newVal = orderedFileNames.join(', ');
-    
+
     const setRes = await window.api.rundownRequest('setRowProperties', {
       RowID: item.rowId,
       [targetCol.ColumnID]: newVal
     });
-    
+
     if (!setRes.success) throw new Error(setRes.error);
   } catch (err) {
     showToast("Error appending element to server: " + err.message);
@@ -525,27 +595,28 @@ function appendRowItem(item, insertBeforeNode = null) {
   if (empty) empty.remove();
 
   itemCount++;
-  
+
   const row = document.createElement('div');
   row.className = 'row-item';
   row.id = `row-item-${itemCount}`;
-  
+
   if (item.isFloated) row.classList.add('floated');
   if (item.isBreak) row.classList.add('break');
   if (!item.files || item.files.length === 0) row.classList.add('no-media');
+  if (item.isLoaded) row.classList.add('loaded', 'sent');
 
   let filesHtml = '';
   if (item.files && item.files.length > 0) {
     item.files.forEach((file, index) => {
       let fallbackHtml = '';
       if (file.isFallback) fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
-      
-      const displayFile = file.isFallback ? `${file.originalFile} (Defaults)` : file.originalFile;
+
+      const displayFile = file.originalFile;
       const resolvedPath = file.resolvedPath;
-      
+
       let fileClass = 'row-file';
       if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
-      
+
       let fileContent = '';
       if (file.isCustom) {
         const prefill = file.requestedFile || file.originalFile || '';
@@ -553,7 +624,7 @@ function appendRowItem(item, insertBeforeNode = null) {
       } else {
         fileContent = `${displayFile || ''} <span class="row-duration"></span> ${fallbackHtml}`;
       }
-      
+
       filesHtml += `
         <div class="file-entry" data-file-index="${index}" style="display: flex; align-items: center; padding: 4px 0;">
           <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px;">
@@ -589,6 +660,8 @@ function appendRowItem(item, insertBeforeNode = null) {
     </div>
     <div class="row-actions">
       <input type="text" class="row-est-duration" value="${formatDuration(item.estDuration)}" title="Est. Duration (click to edit)" />
+      <div class="row-front-time" style="width: 95px; text-align: center; color: var(--text-secondary); font-family: monospace; font-size: 0.875rem;">${formatTimeOfDay(item.frontTime)}</div>
+      <div class="row-back-time" style="width: 95px; text-align: center; color: var(--text-secondary); font-family: monospace; font-size: 0.875rem;">${formatTimeOfDay(item.backTime)}</div>
     </div>
   `;
 
@@ -596,23 +669,26 @@ function appendRowItem(item, insertBeforeNode = null) {
   customInputs.forEach(customInput => {
     const fileIndex = parseInt(customInput.getAttribute('data-file-index'));
     setTimeout(() => customInput.focus(), 50);
-    
+
     let finalized = false;
+    let isSyncing = false;
     const finalizeCustomRow = async () => {
-      if (finalized) return;
-      finalized = true;
+      if (finalized || isSyncing) return;
+      isSyncing = true;
+      customInput.disabled = true; // Prevent multiple entries
+
       const val = customInput.value.trim();
-      
+
       if (!val) {
         if (item.files && item.files[fileIndex]) {
           item.files.splice(fileIndex, 1);
         }
         if (!item.files || item.files.length === 0) item.isCustom = false;
-        
+
         const nextNode = row.nextSibling;
         row.remove();
         appendRowItem(item, nextNode);
-        
+
         const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
         allDOMRows.forEach((rowNode, idx) => {
           rowNode.id = `row-item-${idx + 1}`;
@@ -620,12 +696,13 @@ function appendRowItem(item, insertBeforeNode = null) {
           if (indexDiv) indexDiv.innerText = idx + 1;
         });
         itemCount = allDOMRows.length;
-        
+
         // Sync to server after removing empty input
-        syncRowFilesToServer(item);
+        await syncRowFilesToServer(item);
+        finalized = true;
         return;
       }
-      
+
       // Optimistic local update
       if (!item.files) item.files = [];
       const targetFile = item.files[fileIndex] || { isNewInjection: false };
@@ -635,14 +712,14 @@ function appendRowItem(item, insertBeforeNode = null) {
       targetFile.originalFile = mediaInfo ? mediaInfo.path.split(/[\\/]/).pop() : val;
       targetFile.resolvedPath = mediaInfo ? mediaInfo.path : null;
       targetFile.isFallback = mediaInfo ? mediaInfo.isFallback : false;
-      
+
       if (!item.files[fileIndex]) item.files.push(targetFile);
       item.isCustom = false;
-      
+
       const nextNode = row.nextSibling;
       row.remove();
       appendRowItem(item, nextNode);
-      
+
       const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
       allDOMRows.forEach((rowNode, idx) => {
         rowNode.id = `row-item-${idx + 1}`;
@@ -651,7 +728,8 @@ function appendRowItem(item, insertBeforeNode = null) {
       });
       itemCount = allDOMRows.length;
 
-      syncRowFilesToServer(item);
+      await syncRowFilesToServer(item);
+      finalized = true;
     };
 
     customInput.addEventListener('blur', finalizeCustomRow);
@@ -676,21 +754,17 @@ function appendRowItem(item, insertBeforeNode = null) {
       rowFile.addEventListener('click', () => {
         window.api.openFile(fileObj.resolvedPath);
       });
-      
-      // Fetch duration for this specific file
-      if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv)$/i)) {
-        const video = document.createElement('video');
-        video.preload = 'metadata';
-        video.onloadedmetadata = () => {
-          const duration = video.duration;
+
+      // Fetch duration for this specific file using FFprobe via IPC
+      if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i)) {
+        window.api.getVideoDuration(fileObj.resolvedPath).then(duration => {
           if (duration && !isNaN(duration)) {
             const mins = Math.floor(duration / 60);
             const secs = Math.floor(duration % 60).toString().padStart(2, '0');
             const span = entry.querySelector('.row-duration');
             if (span) span.innerText = `[${mins}:${secs}]`;
           }
-        };
-        video.src = `file:///${fileObj.resolvedPath.replace(/\\/g, '/')}`;
+        }).catch(err => console.error("Error getting duration for", fileObj.resolvedPath, err));
       }
     }
 
@@ -703,19 +777,20 @@ function appendRowItem(item, insertBeforeNode = null) {
         btnRun.classList.add('success');
       }
     } else if (!fileObj.resolvedPath && btnRun) {
-      btnRun.disabled = true;
-      btnRun.style.opacity = '0.5';
-      btnRun.innerText = "Missing";
+      // Allow button to remain active so it can load a placeholder and trigger auto-search
+      btnRun.disabled = false;
+      btnRun.style.opacity = '1';
+      btnRun.innerText = "Load";
     }
 
     if (btnRun) {
-      btnRun.addEventListener('click', () => {
+      btnRun.addEventListener('click', async () => {
         if (btnRun.innerText === "Sending...") return;
-        
+
         enqueueVmixAction(async () => {
           btnRun.innerText = "Sending...";
           const slotToUse = parseInt(inCurrentIndex.value) || 1;
-          
+
           if (inProtectProgram.checked) {
             const activeTitle = await getVmixActiveSlotTitle();
             const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
@@ -729,20 +804,22 @@ function appendRowItem(item, insertBeforeNode = null) {
           // Use fileObj instead of item for sendToVmix
           const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
           await sendToVmix(dummyItemForVmix, slotToUse);
-          
+
+          // Sync state back from sendToVmix to the actual file object
+          fileObj.isLoaded = dummyItemForVmix.isLoaded;
+          fileObj.loadedSlot = dummyItemForVmix.loadedSlot;
+          fileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
+
           // Re-update visual state
           if (btnRun) {
             entry.classList.add('loaded', 'sent');
-            if (dummyItemForVmix.isPlaceholderLoaded) {
+            if (fileObj.isPlaceholderLoaded) {
               entry.classList.add('placeholder-loaded');
-              fileObj.isPlaceholderLoaded = true;
               btnRun.innerText = "Searching...";
             } else {
               entry.classList.remove('placeholder-loaded');
-              fileObj.isPlaceholderLoaded = false;
               btnRun.innerText = "Loaded";
             }
-            fileObj.isLoaded = true;
             btnRun.classList.remove('primary');
             btnRun.classList.add('success');
             // Remove skipped styles if they were applied
@@ -803,49 +880,59 @@ function appendRowItem(item, insertBeforeNode = null) {
   row.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     activeContextMenuRow = row;
-    
+
     const fileEntry = e.target.closest('.file-entry');
     if (fileEntry) {
       activeContextMenuFileIndex = parseInt(fileEntry.getAttribute('data-file-index')) || 0;
     } else {
-      activeContextMenuFileIndex = 0;
+      activeContextMenuFileIndex = -1;
     }
-    
+
     if (row.classList.contains('on-air')) {
       menuStartTimer.innerText = "Stop On-Air Timer";
     } else {
       menuStartTimer.innerText = "Start On-Air Timer";
     }
-    
+
     const fileObj = (item.files && item.files[activeContextMenuFileIndex]) ? item.files[activeContextMenuFileIndex] : null;
     const hasFile = fileObj && (fileObj.requestedFile || fileObj.originalFile);
-    
+
     if (hasFile) {
-      if(menuAddElementAbove) menuAddElementAbove.style.display = 'block';
-      if(menuAddElementBelow) menuAddElementBelow.style.display = 'block';
-      if(menuAddElement) menuAddElement.style.display = 'none';
-      if(menuEditElement) menuEditElement.style.display = 'block';
-      if(menuRemoveElement) menuRemoveElement.style.display = 'block';
-      if(menuDividerRemove) menuDividerRemove.style.display = 'block';
-      if(menuDividerAdd) menuDividerAdd.style.display = 'block';
+      if (menuAddElementAbove) menuAddElementAbove.style.display = 'block';
+      if (menuAddElementBelow) menuAddElementBelow.style.display = 'block';
+      if (menuAddElement) menuAddElement.style.display = 'none';
+      if (menuEditElement) menuEditElement.style.display = 'block';
+      if (menuRemoveElement) menuRemoveElement.style.display = 'block';
+      if (menuDividerRemove) menuDividerRemove.style.display = 'block';
+      if (menuDividerAdd) menuDividerAdd.style.display = 'block';
     } else {
-      if(menuAddElementAbove) menuAddElementAbove.style.display = 'none';
-      if(menuAddElementBelow) menuAddElementBelow.style.display = 'none';
-      if(menuAddElement) menuAddElement.style.display = 'block';
-      if(menuEditElement) menuEditElement.style.display = 'none';
-      if(menuRemoveElement) menuRemoveElement.style.display = 'none';
-      if(menuDividerRemove) menuDividerRemove.style.display = 'none';
-      if(menuDividerAdd) menuDividerAdd.style.display = 'block';
+      if (menuAddElementAbove) menuAddElementAbove.style.display = 'none';
+      if (menuAddElementBelow) menuAddElementBelow.style.display = 'none';
+      if (menuAddElement) menuAddElement.style.display = 'block';
+      if (menuEditElement) menuEditElement.style.display = 'none';
+      if (menuRemoveElement) menuRemoveElement.style.display = 'none';
+      if (menuDividerRemove) menuDividerRemove.style.display = 'none';
+      if (menuDividerAdd) menuDividerAdd.style.display = 'block';
+    }
+
+    contextMenu.classList.remove('hidden');
+
+    const menuHeight = contextMenu.offsetHeight;
+    const windowHeight = window.innerHeight;
+
+    let top = e.pageY;
+    if (top + menuHeight > windowHeight) {
+      top = top - menuHeight;
+      if (top < 0) top = 0;
     }
 
     contextMenu.style.left = `${e.pageX}px`;
-    contextMenu.style.top = `${e.pageY}px`;
-    contextMenu.classList.remove('hidden');
+    contextMenu.style.top = `${top}px`;
   });
 
   row.addEventListener('dblclick', async () => {
     activeScriptItem = item;
-    
+
     // Always pre-fill with local cache if available so it feels instantaneous
     if (item.script) {
       modalScriptContent.value = item.script;
@@ -854,7 +941,7 @@ function appendRowItem(item, insertBeforeNode = null) {
       modalScriptContent.value = 'Loading script...';
       originalScriptText = '';
     }
-    
+
     modalScriptTitle.innerText = `${item.slug} ${item.segment || ''} - Script`;
     btnSaveScript.disabled = true;
     modalScript.classList.add('visible');
@@ -866,22 +953,22 @@ function appendRowItem(item, insertBeforeNode = null) {
         if (res.success && res.data) {
           let scriptContent = '';
           let dataObj = Array.isArray(res.data) ? res.data[0] : res.data;
-          
-          if (dataObj) {
-             if (dataObj.ReadRate !== undefined) activeScriptItem.readRate = dataObj.ReadRate;
-             if (dataObj.ActualDuration !== undefined) activeScriptItem.actualDuration = dataObj.ActualDuration;
 
-             if (typeof dataObj === 'string') {
-               scriptContent = dataObj;
-             } else if (dataObj.Script !== undefined) {
-               scriptContent = dataObj.Script || '';
-             } else if (dataObj.Body !== undefined) {
-               scriptContent = dataObj.Body || '';
-             } else {
-               scriptContent = JSON.stringify(dataObj);
-             }
+          if (dataObj) {
+            if (dataObj.ReadRate !== undefined) activeScriptItem.readRate = dataObj.ReadRate;
+            if (dataObj.ActualDuration !== undefined) activeScriptItem.actualDuration = dataObj.ActualDuration;
+
+            if (typeof dataObj === 'string') {
+              scriptContent = dataObj;
+            } else if (dataObj.Script !== undefined) {
+              scriptContent = dataObj.Script || '';
+            } else if (dataObj.Body !== undefined) {
+              scriptContent = dataObj.Body || '';
+            } else {
+              scriptContent = JSON.stringify(dataObj);
+            }
           }
-          
+
           // Only update if it actually changed
           if (modalScriptContent.value !== scriptContent) {
             // Safety: if they started typing before the fetch returned, don't overwrite their work
@@ -896,7 +983,7 @@ function appendRowItem(item, insertBeforeNode = null) {
         } else if (!item.script) {
           modalScriptContent.value = 'Error loading script or script is empty.';
         }
-      } catch(e) {
+      } catch (e) {
         if (!item.script) modalScriptContent.value = 'Network Error: ' + e.message;
         console.error('Background script fetch failed:', e);
       }
@@ -910,19 +997,38 @@ function appendRowItem(item, insertBeforeNode = null) {
   } else {
     rundownList.appendChild(row);
   }
-  
+
   return row;
 }
 
 function renderRows(items) {
-  globalParsedItems = items;
+  let parsedItems = [...items];
+
+  // Calculate Static Front and Back Times
+  if (activeRundownStartTime) {
+    let currentFrontTime = activeRundownStartTime;
+    for (let i = 0; i < parsedItems.length; i++) {
+      parsedItems[i].frontTime = currentFrontTime;
+      currentFrontTime += (parsedItems[i].estDuration || 0);
+    }
+  }
+
+  if (activeRundownEndTime) {
+    let currentBackTime = activeRundownEndTime;
+    for (let i = parsedItems.length - 1; i >= 0; i--) {
+      currentBackTime -= (parsedItems[i].estDuration || 0);
+      parsedItems[i].backTime = currentBackTime;
+    }
+  }
+
+  globalParsedItems = parsedItems;
   rundownList.innerHTML = '';
   itemCount = 0;
   if (items.length === 0) {
     rundownList.innerHTML = '<div class="empty-state"><p>No items found.</p></div>';
     return;
   }
-  items.forEach(item => appendRowItem(item));
+  globalParsedItems.forEach(item => appendRowItem(item));
 }
 
 // Batch Functions
@@ -933,7 +1039,7 @@ async function processBatch(count, limitToSegment = false) {
 
   for (let i = 0; i < globalParsedItems.length; i++) {
     const item = globalParsedItems[i];
-    
+
     // Segment logic
     if (limitToSegment) {
       // Extract block letter from page (e.g., "A1" -> "A"), fallback to segment
@@ -941,7 +1047,7 @@ async function processBatch(count, limitToSegment = false) {
         const match = (item.page || '').match(/^[a-zA-Z]+/);
         return match ? match[0].toUpperCase() : item.segment;
       };
-      
+
       const itemBlock = getBlockLetter(item);
 
       if (targetSegment === null) {
@@ -950,23 +1056,23 @@ async function processBatch(count, limitToSegment = false) {
         break; // Stop if block changes
       }
     }
-    
+
     if (!item.files || item.files.length === 0) continue;
-    
+
     for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
       const fileObj = item.files[fIdx];
-      
+
       if (itemsSent >= count) return;
       if (item.isFloated || fileObj.isLoaded || fileObj.isLoading || (!fileObj.resolvedPath && !fileObj.requestedFile)) continue;
 
       fileObj.isLoading = true; // Mark instantly to prevent concurrent double-loads
       const slotToUse = parseInt(inCurrentIndex.value) || 1;
-      
+
       // Find DOM button to update UI
       const row = document.getElementById(`row-item-${i + 1}`);
       const entry = row ? row.querySelector(`.file-entry[data-file-index="${fIdx}"]`) : null;
       const btn = entry ? entry.querySelector('.btn-run') : null;
-      
+
       // Program Protection Check
       if (inProtectProgram.checked) {
         const activeTitle = await getVmixActiveSlotTitle();
@@ -984,7 +1090,7 @@ async function processBatch(count, limitToSegment = false) {
       const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx };
       await sendToVmix(dummyItemForVmix, slotToUse);
       fileObj.isLoading = false;
-      
+
       // Sync state back from sendToVmix to the actual file object
       fileObj.isLoaded = dummyItemForVmix.isLoaded;
       fileObj.loadedSlot = dummyItemForVmix.loadedSlot;
@@ -1020,7 +1126,7 @@ async function processBatch(count, limitToSegment = false) {
 btnInit.addEventListener('click', () => {
   enqueueVmixAction(async () => {
     btnInit.disabled = true;
-    
+
     // 1. Mark all as unloaded first
     globalParsedItems.forEach(item => {
       item.isLoaded = false;
@@ -1033,7 +1139,7 @@ btnInit.addEventListener('click', () => {
         });
       }
     });
-    
+
     const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
     allRows.forEach(row => {
       row.classList.remove('loaded', 'sent');
@@ -1078,7 +1184,7 @@ btnLoadElement.addEventListener('click', () => {
 inCurrentIndex.addEventListener('change', () => {
   const max = parseInt(inPoolSize.value, 10) || 15;
   let val = parseInt(inCurrentIndex.value, 10);
-  
+
   if (isNaN(val)) return;
   if (val < 1) inCurrentIndex.value = max;
   else if (val > max) inCurrentIndex.value = 1;
@@ -1087,7 +1193,7 @@ inCurrentIndex.addEventListener('change', () => {
 inCurrentIndex.addEventListener('keydown', (e) => {
   const max = parseInt(inPoolSize.value, 10) || 15;
   let val = parseInt(inCurrentIndex.value, 10);
-  
+
   if (e.key === 'ArrowDown' && val === 1) {
     e.preventDefault();
     inCurrentIndex.value = max;
@@ -1099,110 +1205,120 @@ inCurrentIndex.addEventListener('keydown', (e) => {
 
 // Legacy keyboard shortcuts removed (merged to global hotkeys at end of file)
 
-// Missing Media Auto-Scanner (every 5 seconds)
-setInterval(async () => {
-  if (globalParsedItems.length === 0) return;
-  
-  for (let i = 0; i < globalParsedItems.length; i++) {
-    const item = globalParsedItems[i];
-    if (!item.files || item.files.length === 0) continue;
-    
-    for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
-      const fileObj = item.files[fIdx];
-      
-      // Scan items that explicitly requested a file, but are currently missing OR using a Fallback
-      if (!fileObj.requestedFile || (fileObj.resolvedPath && !fileObj.isFallback)) continue;
+let missingMediaPollTimeout = null;
 
-      const searchName = fileObj.requestedFile;
-      const mediaInfo = await window.api.resolveMedia(searchName);
-      
-      // If we found media, and it's either NOT a fallback (so we found the real one), 
-      // OR we were completely missing before (so finding a fallback is still an upgrade)
-      if (mediaInfo && (!mediaInfo.isFallback || !fileObj.resolvedPath)) {
-        // It was found! Update the item
-        fileObj.resolvedPath = mediaInfo.path;
-        fileObj.originalFile = mediaInfo.path.split(/[\\/]/).pop();
-        fileObj.isFallback = mediaInfo.isFallback;
-        
-        const row = document.getElementById(`row-item-${i + 1}`);
-        if (row) {
-          row.classList.remove('no-media');
-          const entry = row.querySelector(`.file-entry[data-file-index="${fIdx}"]`);
-          
-          if (entry) {
-            const rowFile = entry.querySelector('.row-file');
-            
-            let fallbackHtml = '';
-            if (fileObj.isFallback) {
-              fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
-            }
-            
-            const displayFile = fileObj.isFallback ? `${fileObj.originalFile} (Defaults)` : fileObj.originalFile;
-            
-            if (rowFile) {
-              rowFile.innerHTML = `
-                ${displayFile}
-                <span class="row-duration"></span>
-                ${fallbackHtml}
-              `;
-              rowFile.title = fileObj.resolvedPath;
-              rowFile.onclick = () => window.api.openFile(fileObj.resolvedPath);
-              rowFile.classList.remove('missing-file');
-            }
-            
-            const btnRun = entry.querySelector('.btn-run');
-            if (btnRun) {
-              btnRun.disabled = false;
-              btnRun.style.opacity = '1';
-              btnRun.innerText = "Load";
-            }
-            
-            // Fetch duration
-            if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv)$/i)) {
-              const video = document.createElement('video');
-              video.preload = 'metadata';
-              video.onloadedmetadata = () => {
-                const duration = video.duration;
-                if (duration && !isNaN(duration)) {
-                  const mins = Math.floor(duration / 60);
-                  const secs = Math.floor(duration % 60).toString().padStart(2, '0');
-                  const span = entry.querySelector('.row-duration');
-                  if (span) span.innerText = `[${mins}:${secs}]`;
-                }
-              };
-              video.src = `file:///${fileObj.resolvedPath.replace(/\\/g, '/')}`;
-            }
-            
-            // Auto-Replace in vMix if it was loaded as a placeholder!
-            if (fileObj.isPlaceholderLoaded && fileObj.loadedSlot) {
-              // It's currently playing/loaded in vMix as a black frame. Replace it!
-              enqueueVmixAction(async () => {
-                // Prevent race condition: if it was skipped/overwritten while we were waiting in queue, abort!
-                if (!fileObj.isPlaceholderLoaded || !fileObj.loadedSlot) return;
+async function pollMissingMedia() {
+  clearTimeout(missingMediaPollTimeout);
+  try {
+    if (globalParsedItems.length === 0) return;
 
-                if (!entry) return;
-                const runBtn = entry.querySelector('.btn-run');
-                if (runBtn) runBtn.innerText = "Replacing...";
-                
-                const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx };
-                await sendToVmix(dummyItemForVmix, fileObj.loadedSlot);
-                
-                // Re-update visual state
-                if (runBtn) {
-                  entry.classList.remove('placeholder-loaded');
-                  fileObj.isPlaceholderLoaded = false;
-                  runBtn.innerText = "Loaded";
-                  runBtn.classList.remove('primary');
-                  runBtn.classList.add('success');
+    for (let i = 0; i < globalParsedItems.length; i++) {
+      const item = globalParsedItems[i];
+      if (!item.files || item.files.length === 0) continue;
+
+      for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
+        const fileObj = item.files[fIdx];
+
+        // Scan items that explicitly requested a file, but are currently missing OR using a Fallback
+        if (!fileObj.requestedFile || (fileObj.resolvedPath && !fileObj.isFallback)) continue;
+
+        const searchName = fileObj.requestedFile;
+        const mediaInfo = await window.api.resolveMedia(searchName);
+
+        // If we found media, and it's either NOT a fallback (so we found the real one), 
+        // OR we were completely missing before (so finding a fallback is still an upgrade)
+        if (mediaInfo && (!mediaInfo.isFallback || !fileObj.resolvedPath)) {
+          // It was found! Update the item
+          fileObj.resolvedPath = mediaInfo.path;
+          fileObj.originalFile = mediaInfo.path.split(/[\\/]/).pop();
+          fileObj.isFallback = mediaInfo.isFallback;
+
+          const row = document.getElementById(`row-item-${i + 1}`);
+          if (row) {
+            row.classList.remove('no-media');
+            const entry = row.querySelector(`.file-entry[data-file-index="${fIdx}"]`);
+
+            if (entry) {
+              const rowFile = entry.querySelector('.row-file');
+
+              let fallbackHtml = '';
+              if (fileObj.isFallback) {
+                fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
+              }
+
+              const displayFile = fileObj.originalFile;
+
+              if (rowFile) {
+                rowFile.innerHTML = `
+                  ${displayFile}
+                  <span class="row-duration"></span>
+                  ${fallbackHtml}
+                `;
+                rowFile.title = fileObj.resolvedPath;
+                rowFile.onclick = () => window.api.openFile(fileObj.resolvedPath);
+                rowFile.classList.remove('missing-file');
+              }
+
+              const btnRun = entry.querySelector('.btn-run');
+              if (btnRun) {
+                btnRun.disabled = false;
+                btnRun.style.opacity = '1';
+                btnRun.innerText = "Load";
+              }
+
+              // Fetch duration using FFprobe via IPC
+              if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i)) {
+                try {
+                  const duration = await window.api.getVideoDuration(fileObj.resolvedPath);
+                  if (duration && !isNaN(duration)) {
+                    const mins = Math.floor(duration / 60);
+                    const secs = Math.floor(duration % 60).toString().padStart(2, '0');
+                    const span = entry.querySelector('.row-duration');
+                    if (span) span.innerText = `[${mins}:${secs}]`;
+                  }
+                } catch (e) {
+                  console.error("Error getting duration for", fileObj.resolvedPath, e);
                 }
-              });
+              }
+
+              // Auto-Replace in vMix if it was loaded as a placeholder!
+              if (fileObj.isPlaceholderLoaded && fileObj.loadedSlot) {
+                // It's currently playing/loaded in vMix as a black frame. Replace it!
+                enqueueVmixAction(async () => {
+                  // Prevent race condition: if it was skipped/overwritten while we were waiting in queue, abort!
+                  if (!fileObj.isPlaceholderLoaded || !fileObj.loadedSlot) return;
+
+                  if (!entry) return;
+                  const runBtn = entry.querySelector('.btn-run');
+                  if (runBtn) runBtn.innerText = "Replacing...";
+
+                  const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx };
+                  await sendToVmix(dummyItemForVmix, fileObj.loadedSlot);
+
+                  // Re-update visual state
+                  if (runBtn) {
+                    entry.classList.remove('placeholder-loaded');
+                    fileObj.isPlaceholderLoaded = false;
+                    runBtn.innerText = "Loaded";
+                    runBtn.classList.remove('primary');
+                    runBtn.classList.add('success');
+                  }
+                });
+              }
             }
           }
         }
       }
     }
+  } catch (e) {
+    console.error("Auto-scanner error:", e);
+  } finally {
+    missingMediaPollTimeout = setTimeout(pollMissingMedia, 5000);
   }
-}, 5000);
+}
+
+// Start auto-scanner
+pollMissingMedia();
 
 // Rundown Selection Modal Logic
 btnCloseRundowns.addEventListener('click', () => {
@@ -1220,7 +1336,7 @@ activeRundownTitle.addEventListener('click', async () => {
 
     selectRundown.innerHTML = '';
     let activeRundowns = res.data.filter(rd => rd.Archived !== 1 && rd.Template !== 1);
-    
+
     // Sort by newest first (descending Start timestamp)
     activeRundowns.sort((a, b) => b.Start - a.Start);
 
@@ -1262,11 +1378,20 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
   const loadedKeys = new Set();
   const placeholderMap = new Map();
   if (preserveState) {
-    globalParsedItems.filter(i => i.isLoaded).forEach(i => {
-      const key = `${i.page}|${i.slug}|${i.originalFile}`;
-      loadedKeys.add(key);
-      if (i.isPlaceholderLoaded) {
-        placeholderMap.set(key, i.loadedSlot);
+    globalParsedItems.forEach(i => {
+      const pageStr = i.page ? String(i.page).trim() : '';
+      if (i.isLoaded) loadedKeys.add(`${pageStr}|${i.slug}|__ROW__`);
+
+      if (i.files) {
+        i.files.forEach(f => {
+          if (f.isLoaded) {
+            const key = `${pageStr}|${i.slug}|${f.originalFile}`;
+            loadedKeys.add(key);
+            if (f.isPlaceholderLoaded) {
+              placeholderMap.set(key, f.loadedSlot);
+            }
+          }
+        });
       }
     });
   }
@@ -1275,7 +1400,20 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
   rundownList.innerHTML = '<div class="empty-state"><p>Loading rundown rows...</p></div>';
 
   try {
-    inCurrentIndex.value = 1; // Reset when fetching a different rundown
+    if (!preserveState) {
+      inCurrentIndex.value = 1; // Reset only when fetching a completely different rundown
+    }
+
+    // Fetch Start/End times from rundown list
+    let listRes = await window.api.rundownRequest('getRundowns');
+    if (listRes.success && listRes.data) {
+      const rd = listRes.data.find(r => String(r.RundownID) === String(rundownId));
+      if (rd) {
+        activeRundownStartTime = parseInt(rd.Start, 10);
+        activeRundownEndTime = parseInt(rd.End, 10);
+      }
+    }
+
     let res = await window.api.rundownRequest('getRows', { RundownID: rundownId });
     if (!res.success) throw new Error(res.error);
 
@@ -1283,11 +1421,11 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
     const parsedItems = [];
 
     for (const row of rows) {
-      const fileField = row.file || row.source || ''; 
+      const fileField = row.file || row.source || '';
       const slugField = row.StorySlug || '';
       const scriptField = row.Script || row.Body || row.StoryBody || '';
       const rowIdField = row.RowID || row.ID || row.id || '';
-      
+
       if (!fileField && !slugField) continue;
 
       const fileNames = fileField.split(',').map(s => s.trim()).filter(s => s.length > 0);
@@ -1295,9 +1433,9 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
       const estDur = parseInt(row.EstimatedDuration || row.Duration) || 0;
       const pageStr = row.PageNumber ? String(row.PageNumber).trim() : '';
       const isBreak = /^[A-Za-z]+0$/.test(pageStr);
-      
+
       let filesArray = [];
-      
+
       if (!fileNames || fileNames.length === 0) {
         filesArray = [];
       } else {
@@ -1305,21 +1443,27 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
           let searchName = f.trim();
           const mediaInfo = await window.api.resolveMedia(searchName);
           const originalFile = mediaInfo ? mediaInfo.path.split(/[\\/]/).pop() : searchName;
-          
+
+          const fileKey = `${pageStr}|${slugField}|${originalFile}`;
+          const fileWasLoaded = preserveState && loadedKeys.has(fileKey);
+          const filePSlot = preserveState ? placeholderMap.get(fileKey) : undefined;
+
           filesArray.push({
             requestedFile: searchName,
             originalFile: originalFile,
             resolvedPath: mediaInfo ? mediaInfo.path : null,
             isFallback: mediaInfo ? mediaInfo.isFallback : false,
-            isCustom: false
+            isCustom: false,
+            isLoaded: fileWasLoaded,
+            isPlaceholderLoaded: filePSlot !== undefined,
+            loadedSlot: filePSlot !== undefined ? filePSlot : null
           });
         }
       }
-      
-      const key = `${pageStr}|${slugField}|`;
-      const wasLoaded = preserveState && loadedKeys.has(key);
-      const pSlot = preserveState ? placeholderMap.get(key) : undefined;
-      
+
+      const rowKey = `${pageStr}|${slugField}|__ROW__`;
+      const rowWasLoaded = preserveState && loadedKeys.has(rowKey);
+
       parsedItems.push({
         page: row.PageNumber,
         slug: slugField,
@@ -1329,9 +1473,9 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
         estDuration: estDur,
         files: filesArray,
         isFloated: isFloated,
-        isLoaded: wasLoaded,
-        isPlaceholderLoaded: pSlot !== undefined,
-        loadedSlot: pSlot !== undefined ? pSlot : null,
+        isLoaded: rowWasLoaded,
+        isPlaceholderLoaded: false,
+        loadedSlot: null,
         isBreak: isBreak
       });
     }
@@ -1346,7 +1490,7 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
 
     // Save as last loaded rundown
     await window.api.saveSettings({ lastRundownId: rundownId, lastRundownTitle: rundownTitle });
-    
+
     // Force an immediate poll to instantly highlight the On-Air timer if active
     clearTimeout(timerPollTimeout);
     pollOnAirTimer();
@@ -1413,8 +1557,8 @@ btnLoadCsv.addEventListener('click', () => {
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i];
         if (!line.trim()) continue;
-        const cols = line.split(','); 
-        
+        const cols = line.split(',');
+
         if (cols.length > Math.max(slugIdx, fileIdx)) {
           const slug = slugIdx > -1 ? cols[slugIdx].replace(/"/g, '') : '';
           const fileField = fileIdx > -1 ? cols[fileIdx].replace(/"/g, '') : '';
@@ -1430,7 +1574,7 @@ btnLoadCsv.addEventListener('click', () => {
             .filter(f => f.length > 0);
 
           const isBreak = /^[A-Za-z]+0$/.test(page);
-          
+
           if (fileNames.length === 0) {
             parsedItems.push({ page, slug, segment, script, requestedFile: '', originalFile: '', resolvedPath: null, isFallback: false, isFloated: false, isLoaded: false, isBreak });
           } else {
@@ -1471,10 +1615,10 @@ menuAddElement.addEventListener('click', () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const anchorItem = globalParsedItems[targetIndex];
   if (!anchorItem.files) anchorItem.files = [];
-  
+
   anchorItem.files.push({
     requestedFile: '',
     originalFile: '',
@@ -1483,11 +1627,11 @@ menuAddElement.addEventListener('click', () => {
     isCustom: true,
     isNewInjection: true
   });
-  
+
   const nextNode = activeContextMenuRow.nextSibling;
   activeContextMenuRow.remove();
   appendRowItem(anchorItem, nextNode);
-  
+
   const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
   allDOMRows.forEach((rowNode, idx) => {
     rowNode.id = `row-item-${idx + 1}`;
@@ -1502,10 +1646,10 @@ menuAddElementAbove.addEventListener('click', () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const anchorItem = globalParsedItems[targetIndex];
   if (!anchorItem.files) anchorItem.files = [];
-  
+
   anchorItem.files.splice(activeContextMenuFileIndex, 0, {
     requestedFile: '',
     originalFile: '',
@@ -1514,11 +1658,11 @@ menuAddElementAbove.addEventListener('click', () => {
     isCustom: true,
     isNewInjection: true
   });
-  
+
   const nextNode = activeContextMenuRow.nextSibling;
   activeContextMenuRow.remove();
   appendRowItem(anchorItem, nextNode);
-  
+
   const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
   allDOMRows.forEach((rowNode, idx) => {
     rowNode.id = `row-item-${idx + 1}`;
@@ -1533,10 +1677,10 @@ menuAddElementBelow.addEventListener('click', () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const anchorItem = globalParsedItems[targetIndex];
   if (!anchorItem.files) anchorItem.files = [];
-  
+
   anchorItem.files.splice(activeContextMenuFileIndex + 1, 0, {
     requestedFile: '',
     originalFile: '',
@@ -1545,11 +1689,11 @@ menuAddElementBelow.addEventListener('click', () => {
     isCustom: true,
     isNewInjection: true
   });
-  
+
   const nextNode = activeContextMenuRow.nextSibling;
   activeContextMenuRow.remove();
   appendRowItem(anchorItem, nextNode);
-  
+
   const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
   allDOMRows.forEach((rowNode, idx) => {
     rowNode.id = `row-item-${idx + 1}`;
@@ -1564,17 +1708,17 @@ menuEditElement.addEventListener('click', () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const anchorItem = globalParsedItems[targetIndex];
   if (anchorItem.files && anchorItem.files[activeContextMenuFileIndex]) {
     anchorItem.files[activeContextMenuFileIndex].isCustom = true;
     anchorItem.files[activeContextMenuFileIndex].isNewInjection = false;
   }
-  
+
   const nextNode = activeContextMenuRow.nextSibling;
   activeContextMenuRow.remove();
   appendRowItem(anchorItem, nextNode);
-  
+
   const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
   allDOMRows.forEach((rowNode, idx) => {
     rowNode.id = `row-item-${idx + 1}`;
@@ -1589,17 +1733,17 @@ menuRemoveElement.addEventListener('click', async () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const anchorItem = globalParsedItems[targetIndex];
-  
+
   if (anchorItem.files && anchorItem.files.length > 0) {
     anchorItem.files.splice(activeContextMenuFileIndex, 1);
   }
-  
+
   const nextNode = activeContextMenuRow.nextSibling;
   activeContextMenuRow.remove();
   appendRowItem(anchorItem, nextNode);
-  
+
   const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
   allDOMRows.forEach((rowNode, idx) => {
     rowNode.id = `row-item-${idx + 1}`;
@@ -1607,7 +1751,7 @@ menuRemoveElement.addEventListener('click', async () => {
     if (indexDiv) indexDiv.innerText = idx + 1;
   });
   itemCount = allDOMRows.length;
-  
+
   syncRowFilesToServer(anchorItem);
 });
 
@@ -1617,13 +1761,44 @@ menuMarkPrevLoaded.addEventListener('click', () => {
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex > -1) {
     for (let i = 0; i <= targetIndex; i++) {
-      allRows[i].classList.add('loaded', 'sent');
-      if (globalParsedItems[i]) globalParsedItems[i].isLoaded = true;
-      const btn = allRows[i].querySelector('.btn-run');
-      if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-        btn.innerText = "Loaded";
-        btn.classList.remove('primary');
-        btn.classList.add('success');
+      const gItem = globalParsedItems[i];
+      if (gItem && gItem.files && gItem.files.length > 0) {
+        if (i < targetIndex || activeContextMenuFileIndex === -1) {
+          allRows[i].classList.add('loaded', 'sent');
+          gItem.isLoaded = true;
+          gItem.files.forEach(f => f.isLoaded = true);
+
+          const entries = allRows[i].querySelectorAll('.file-entry');
+          entries.forEach(e => {
+            e.classList.add('loaded', 'sent');
+            const btn = e.querySelector('.btn-run');
+            if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+              btn.innerText = "Loaded";
+              btn.classList.remove('primary');
+              btn.classList.add('success');
+            }
+          });
+        } else {
+          for (let fIdx = 0; fIdx <= activeContextMenuFileIndex; fIdx++) {
+            if (gItem.files[fIdx]) {
+              gItem.files[fIdx].isLoaded = true;
+              const entry = allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`);
+              if (entry) {
+                entry.classList.add('loaded', 'sent');
+                const btn = entry.querySelector('.btn-run');
+                if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+                  btn.innerText = "Loaded";
+                  btn.classList.remove('primary');
+                  btn.classList.add('success');
+                }
+              }
+            }
+          }
+          if (gItem.files.every(f => f.isLoaded)) {
+            gItem.isLoaded = true;
+            allRows[i].classList.add('loaded', 'sent');
+          }
+        }
       }
     }
   }
@@ -1633,14 +1808,44 @@ menuMarkLoaded.addEventListener('click', () => {
   if (!activeContextMenuRow) return;
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
-  if (targetIndex > -1 && globalParsedItems[targetIndex]) globalParsedItems[targetIndex].isLoaded = true;
-  
-  activeContextMenuRow.classList.add('loaded', 'sent');
-  const btn = activeContextMenuRow.querySelector('.btn-run');
-  if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-    btn.innerText = "Loaded";
-    btn.classList.remove('primary');
-    btn.classList.add('success');
+  const gItem = globalParsedItems[targetIndex];
+  if (targetIndex > -1 && gItem && gItem.files && gItem.files.length > 0) {
+    if (activeContextMenuFileIndex === -1) {
+      gItem.isLoaded = true;
+      gItem.files.forEach(f => f.isLoaded = true);
+
+      activeContextMenuRow.classList.add('loaded', 'sent');
+      const entries = activeContextMenuRow.querySelectorAll('.file-entry');
+      entries.forEach(e => {
+        e.classList.add('loaded', 'sent');
+        const btn = e.querySelector('.btn-run');
+        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+          btn.innerText = "Loaded";
+          btn.classList.remove('primary');
+          btn.classList.add('success');
+        }
+      });
+    } else {
+      if (gItem.files && gItem.files[activeContextMenuFileIndex]) {
+        gItem.files[activeContextMenuFileIndex].isLoaded = true;
+      }
+
+      const entry = activeContextMenuRow.querySelector(`.file-entry[data-file-index="${activeContextMenuFileIndex}"]`);
+      if (entry) {
+        entry.classList.add('loaded', 'sent');
+        const btn = entry.querySelector('.btn-run');
+        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+          btn.innerText = "Loaded";
+          btn.classList.remove('primary');
+          btn.classList.add('success');
+        }
+      }
+
+      if (gItem.files && gItem.files.every(f => f.isLoaded)) {
+        gItem.isLoaded = true;
+        activeContextMenuRow.classList.add('loaded', 'sent');
+      }
+    }
   }
 });
 
@@ -1648,17 +1853,49 @@ menuMarkUnloaded.addEventListener('click', () => {
   if (!activeContextMenuRow) return;
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
-  if (targetIndex > -1 && globalParsedItems[targetIndex]) {
-    globalParsedItems[targetIndex].isLoaded = false;
-    globalParsedItems[targetIndex].isLoading = false;
-  }
+  const gItem = globalParsedItems[targetIndex];
+  if (targetIndex > -1 && gItem) {
+    if (activeContextMenuFileIndex === -1) {
+      gItem.isLoaded = false;
+      gItem.isLoading = false;
+      if (gItem.files) gItem.files.forEach(f => {
+        f.isLoaded = false;
+        f.isLoading = false;
+        f.isPlaceholderLoaded = false;
+      });
 
-  activeContextMenuRow.classList.remove('loaded', 'sent');
-  const btn = activeContextMenuRow.querySelector('.btn-run');
-  if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-    btn.innerText = "Load";
-    btn.classList.remove('success');
-    btn.classList.add('primary');
+      activeContextMenuRow.classList.remove('loaded', 'sent');
+      const entries = activeContextMenuRow.querySelectorAll('.file-entry');
+      entries.forEach(e => {
+        e.classList.remove('loaded', 'sent', 'placeholder-loaded');
+        const btn = e.querySelector('.btn-run');
+        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+          btn.innerText = "Load";
+          btn.classList.remove('success');
+          btn.classList.add('primary');
+        }
+      });
+    } else {
+      if (gItem.files && gItem.files[activeContextMenuFileIndex]) {
+        gItem.files[activeContextMenuFileIndex].isLoaded = false;
+        gItem.files[activeContextMenuFileIndex].isLoading = false;
+        gItem.files[activeContextMenuFileIndex].isPlaceholderLoaded = false;
+      }
+
+      gItem.isLoaded = false;
+      activeContextMenuRow.classList.remove('loaded', 'sent');
+
+      const entry = activeContextMenuRow.querySelector(`.file-entry[data-file-index="${activeContextMenuFileIndex}"]`);
+      if (entry) {
+        entry.classList.remove('loaded', 'sent', 'placeholder-loaded');
+        const btn = entry.querySelector('.btn-run');
+        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
+          btn.innerText = "Load";
+          btn.classList.remove('success');
+          btn.classList.add('primary');
+        }
+      }
+    }
   }
 });
 
@@ -1667,10 +1904,10 @@ menuMarkFloated.addEventListener('click', async () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const item = globalParsedItems[targetIndex];
   const newFloatedState = !item.isFloated;
-  
+
   if (item.rowId) {
     try {
       const res = await window.api.rundownRequest('setRowProperties', {
@@ -1688,7 +1925,7 @@ menuMarkFloated.addEventListener('click', async () => {
   }
 
   item.isFloated = newFloatedState;
-  
+
   if (newFloatedState) {
     activeContextMenuRow.classList.add('floated');
   } else {
@@ -1701,14 +1938,14 @@ menuStartTimer.addEventListener('click', async () => {
   const allRows = Array.from(rundownList.querySelectorAll('.row-item'));
   const targetIndex = allRows.indexOf(activeContextMenuRow);
   if (targetIndex === -1 || !globalParsedItems[targetIndex]) return;
-  
+
   const item = globalParsedItems[targetIndex];
-  
+
   if (!activeRundownId) {
     showToast("Cannot modify timer: No active Rundown loaded via API.");
     return;
   }
-  
+
   if (!item.rowId) {
     showToast("Cannot modify timer: This row does not have a valid Row ID on the server.");
     return;
@@ -1731,7 +1968,7 @@ menuStartTimer.addEventListener('click', async () => {
         RowID: item.rowId
       });
     }
-    
+
     if (!res.success) {
       showToast(`Error ${isStopping ? 'stopping' : 'starting'} timer: ` + (res.error || "Unknown error"));
     } else {
@@ -1773,7 +2010,7 @@ function optimisticUpdateTimerUI(rowId) {
 
   activeOnAirRowId = rowId;
   activeOnAirStartDate = Math.floor((Date.now() + serverTimeOffsetMs) / 1000);
-  
+
   const targetIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(rowId));
   if (targetIndex > -1) {
     const targetRow = document.getElementById(`row-item-${targetIndex + 1}`);
@@ -1783,6 +2020,30 @@ function optimisticUpdateTimerUI(rowId) {
     }
   }
   updateLiveTimers();
+}
+
+function formatDuration(seconds) {
+  if (isNaN(seconds)) return "00:00";
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function formatTimeOfDay(unixSeconds) {
+  if (!unixSeconds) return '--:--:--';
+  const d = new Date(unixSeconds * 1000);
+  let hh = d.getHours();
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+
+  if (inUse24Hr && inUse24Hr.checked) {
+    return `${String(hh).padStart(2, '0')}:${mm}:${ss}`;
+  } else {
+    const ampm = hh >= 12 ? 'PM' : 'AM';
+    hh = hh % 12;
+    hh = hh ? hh : 12; // 0 becomes 12
+    return `${String(hh).padStart(2, '0')}:${mm}:${ss} ${ampm}`;
+  }
 }
 
 function formatLiveTime(totalSeconds) {
@@ -1799,27 +2060,82 @@ function updateLiveTimers() {
   const timerElapsed = document.getElementById('timer-elapsed');
   const timerRemaining = document.getElementById('timer-remaining');
   const timerBlockRemaining = document.getElementById('timer-block-remaining');
-  
+
+  const timerLiveContent = document.getElementById('timer-live-content');
+  const timerIdleContent = document.getElementById('timer-idle-content');
+  const timerIdleText = document.getElementById('timer-idle-text');
+
   if (!topTimerDisplay) return;
 
-  if (!activeOnAirRowId || !activeOnAirStartDate) {
-    topTimerDisplay.style.opacity = '0';
-    setTimeout(() => {
-      if (!activeOnAirRowId) topTimerDisplay.style.visibility = 'hidden';
-    }, 300);
-    return;
+  const topClockDisplay = document.getElementById('top-clock-display');
+  const nowUnix = Math.floor((Date.now() + serverTimeOffsetMs) / 1000);
+  const timeOfDayStr = formatTimeOfDay(nowUnix);
+
+  if (topClockDisplay) {
+    topClockDisplay.innerText = timeOfDayStr;
   }
-  
+
   topTimerDisplay.style.visibility = 'visible';
   topTimerDisplay.style.opacity = '1';
-  
+
+  if (!activeOnAirRowId || !activeOnAirStartDate) {
+    if (timerLiveContent) timerLiveContent.style.display = 'none';
+    if (timerIdleContent) timerIdleContent.style.display = 'flex';
+
+    if (activeRundownStartTime && activeRundownStartTime > nowUnix) {
+      const timeUntil = activeRundownStartTime - nowUnix;
+      const hours = Math.floor(timeUntil / 3600);
+      const minutes = Math.floor((timeUntil % 3600) / 60);
+      const seconds = timeUntil % 60;
+
+      const pad = (num) => String(num).padStart(2, '0');
+      let countdownStr = '';
+      if (hours > 0) {
+        countdownStr = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+      } else {
+        countdownStr = `${pad(minutes)}:${pad(seconds)}`;
+      }
+
+      if (timerIdleText) {
+        timerIdleText.innerHTML = `Show Starts in <span style="color: var(--accent); margin-right: 4px;">${countdownStr}</span> at ${formatTimeOfDay(activeRundownStartTime)}`;
+      }
+    } else {
+      if (timerIdleText) {
+        timerIdleText.innerHTML = `<span style="color: var(--text-secondary);">Timer Idle</span>`;
+      }
+    }
+    return;
+  }
+
+  if (timerLiveContent) timerLiveContent.style.display = 'flex';
+  if (timerIdleContent) timerIdleContent.style.display = 'none';
+
   const targetIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(activeOnAirRowId));
   if (targetIndex === -1) return;
-  
+
   const currentItem = globalParsedItems[targetIndex];
-  const nowUnix = Math.floor((Date.now() + serverTimeOffsetMs) / 1000);
+
+  if (!isWindowFocused) {
+    if (lastScrolledRowId !== activeOnAirRowId) {
+      lastScrolledRowId = activeOnAirRowId;
+      const rowEl = document.getElementById(`row-item-${targetIndex + 1}`);
+      if (rowEl) {
+        const contentEl = document.querySelector('.content');
+        if (contentEl) {
+          const contentRect = contentEl.getBoundingClientRect();
+          const rowRect = rowEl.getBoundingClientRect();
+          const desiredOffset = 150; // Leave space above for context
+          const currentOffset = rowRect.top - contentRect.top;
+          const scrollDiff = currentOffset - desiredOffset;
+          contentEl.scrollBy({ top: scrollDiff, behavior: 'smooth' });
+        }
+      }
+    }
+  } else {
+    lastScrolledRowId = null;
+  }
   const elapsed = Math.max(0, nowUnix - activeOnAirStartDate);
-  
+
   // Update Block Elapsed
   const firstItemIndex = getBlockFirstItemIndex(targetIndex);
   const firstItem = globalParsedItems[firstItemIndex];
@@ -1838,19 +2154,19 @@ function updateLiveTimers() {
     for (let i = firstItemIndex; i < earliestData.rowIndex; i++) {
       sumBeforeEarliest += (globalParsedItems[i].estDuration || 0);
     }
-    
+
     const earliestElapsed = Math.max(0, nowUnix - earliestData.startTime);
     if (timerBlockElapsed) timerBlockElapsed.innerText = formatLiveTime(sumBeforeEarliest + earliestElapsed);
   }
 
   // Update Elapsed
   timerElapsed.innerText = formatLiveTime(elapsed);
-  
+
   // Update Remaining
   const estDur = currentItem.estDuration || 0;
   const remaining = estDur - Math.max(0, elapsed); // ensure elapsed is >=0
   timerRemaining.innerText = formatLiveTime(remaining);
-  
+
   // Update Remaining in Block
   const clampedRemaining = Math.max(0, remaining);
   let subsequentSum = 0;
@@ -1859,16 +2175,41 @@ function updateLiveTimers() {
     if (nextItem.isBreak) break; // Reached end of block
     subsequentSum += (nextItem.estDuration || 0);
   }
-  
+
   timerBlockRemaining.innerText = formatLiveTime(clampedRemaining + subsequentSum);
+
+  // Update Over/Under
+  const timerOnOver = document.getElementById('timer-on-over');
+  if (timerOnOver && activeRundownEndTime) {
+    let subsequentSumToEnd = 0;
+    for (let i = targetIndex + 1; i < globalParsedItems.length; i++) {
+      subsequentSumToEnd += (globalParsedItems[i].estDuration || 0);
+    }
+    const projectedEndTime = nowUnix + clampedRemaining + subsequentSumToEnd;
+    const overUnderSecs = projectedEndTime - activeRundownEndTime;
+
+    let isOver = overUnderSecs > 0;
+    let absOverUnder = Math.floor(Math.abs(overUnderSecs));
+    const mm = Math.floor(absOverUnder / 60).toString().padStart(2, '0');
+    const ss = (absOverUnder % 60).toString().padStart(2, '0');
+
+    if (absOverUnder === 0) {
+      timerOnOver.innerText = "00:00";
+      timerOnOver.style.color = "var(--text-primary)";
+    } else {
+      timerOnOver.innerText = `${isOver ? '+' : '-'}${mm}:${ss}`;
+      timerOnOver.style.color = isOver ? "var(--error)" : "var(--success)";
+    }
+  }
 }
 
 // Start 500ms localized tick loop
 setInterval(updateLiveTimers, 500);
 
 async function pollOnAirTimer() {
+  clearTimeout(timerPollTimeout);
   let nextDelay = 10000; // default 10s
-  
+
   try {
     if (activeRundownId) {
       const res = await window.api.rundownRequest('getRundowns');
@@ -1883,11 +2224,34 @@ async function pollOnAirTimer() {
         const activeRundown = res.data.find(r => String(r.RundownID) === String(activeRundownId));
         if (activeRundown) {
           if (Date.now() > timerIgnoreApiUpdatesUntil) {
-            const isActive = activeRundown.OnAirTimer_Active && activeRundown.OnAirTimer_Active !== "0" && activeRundown.OnAirTimer_Active !== "false";
+            activeRundownStartTime = parseInt(activeRundown.Start, 10);
+            activeRundownEndTime = parseInt(activeRundown.End, 10);
+
+            const isActive = activeRundown.OnAirTimer_Active &&
+              activeRundown.OnAirTimer_Active !== "0" &&
+              activeRundown.OnAirTimer_Active !== "false" &&
+              activeRundown.OnAirTimer_Active !== "null" &&
+              activeRundown.OnAirTimer_RowID &&
+              activeRundown.OnAirTimer_RowID !== "0" &&
+              activeRundown.OnAirTimer_RowID !== "null" &&
+              activeRundown.OnAirTimer_RowID !== "" &&
+              activeRundown.OnAirTimer_RowID !== "-1" &&
+              activeRundown.OnAirTimer_Date &&
+              activeRundown.OnAirTimer_Date !== "0" &&
+              activeRundown.OnAirTimer_Date !== "null" &&
+              activeRundown.OnAirTimer_Date !== "";
             if (isActive) {
               nextDelay = 2000;
-              activeOnAirRowId = activeRundown.OnAirTimer_RowID;
-              activeOnAirStartDate = parseInt(activeRundown.OnAirTimer_Date, 10);
+              const serverStartDate = parseInt(activeRundown.OnAirTimer_Date, 10);
+              // Prevent 1-second UI jumping by ignoring minor server variance on the same active row
+              if (activeOnAirRowId === activeRundown.OnAirTimer_RowID &&
+                activeOnAirStartDate !== null &&
+                Math.abs(activeOnAirStartDate - serverStartDate) <= 2) {
+                // Keep the local activeOnAirStartDate to prevent jitter
+              } else {
+                activeOnAirRowId = activeRundown.OnAirTimer_RowID;
+                activeOnAirStartDate = serverStartDate;
+              }
             } else {
               activeOnAirRowId = null;
               activeOnAirStartDate = null;
@@ -1896,13 +2260,13 @@ async function pollOnAirTimer() {
             // Still in optimistic window, keep polling fast
             nextDelay = 2000;
           }
-          
+
           const onAirRowId = activeRundown.OnAirTimer_RowID;
-          
+
           // Clear all current on-air highlights
           const allRows = document.querySelectorAll('.row-item');
           allRows.forEach(row => row.classList.remove('on-air'));
-          
+
           // Apply to the active one if found
           if (onAirRowId) {
             const targetIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(onAirRowId));
@@ -1945,7 +2309,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     btnLoadElement.click();
   }
-  
+
   // CTRL + ENTER: Load Next Block
   if (e.key === 'Enter' && e.ctrlKey) {
     e.preventDefault();

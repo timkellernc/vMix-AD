@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
+  selectFile: () => ipcRenderer.invoke('select-file'),
   scanDefaultsNow: () => ipcRenderer.invoke('scan-defaults-now'),
   resolveMedia: (filename) => ipcRenderer.invoke('resolve-media', filename),
   vmixRequest: (commandStr) => ipcRenderer.invoke('vmix-request', commandStr),

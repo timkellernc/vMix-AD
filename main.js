@@ -22,15 +22,24 @@ ipcMain.handle('open-file', async (event, filePath) => {
 
 const ffprobe = require('@ffprobe-installer/ffprobe');
 
-ipcMain.handle('get-video-duration', async (event, filePath) => {
-  try {
-    const { getVideoDurationInSeconds } = await import('get-video-duration');
-    const duration = await getVideoDurationInSeconds(filePath, ffprobe.path);
-    return duration;
-  } catch (err) {
-    fs.appendFileSync(path.join(__dirname, 'debug-log.txt'), 'Duration Error for ' + filePath + ': ' + err.message + '\n');
-    return null;
-  }
+const { execFile } = require('child_process');
+
+ipcMain.handle('get-video-duration', (event, filePath) => {
+  return new Promise((resolve) => {
+    execFile(ffprobe.path, [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ], (error, stdout, stderr) => {
+      if (error) {
+        fs.appendFileSync(path.join(__dirname, 'debug-log.txt'), 'Duration Error for ' + filePath + ': ' + error.message + '\n');
+        return resolve(null);
+      }
+      const duration = parseFloat(stdout);
+      resolve(isNaN(duration) ? null : duration);
+    });
+  });
 });
 
 let mainWindow;
@@ -93,6 +102,20 @@ ipcMain.handle('save-settings', (event, settings) => {
 ipcMain.handle('select-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory']
+  });
+  if (!result.canceled) {
+    return result.filePaths[0];
+  }
+  return null;
+});
+
+ipcMain.handle('select-file', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    filters: [
+      { name: 'Media Files', extensions: ['mp4', 'mov', 'webm', 'mkv', 'mxf', 'mpg', 'm4v', 'ts', 'mp3', 'wav', 'png', 'jpg', 'jpeg'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
   });
   if (!result.canceled) {
     return result.filePaths[0];

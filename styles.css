@@ -184,8 +184,9 @@ h3 {
 
 .row-item {
   display: flex;
-  align-items: flex-start; /* Align to top for multi-line support */
-  padding: 6px 4px 6px 12px;
+  align-items: center;
+  /* Centered for better single/multi line aesthetics */
+  padding: 2px 4px 2px 12px;
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: 6px;
@@ -201,8 +202,7 @@ h3 {
 }
 
 .row-item.sent {
-  background: rgba(52, 199, 89, 0.1);
-  border-color: rgba(52, 199, 89, 0.3);
+  /* No longer highlight the entire row */
 }
 
 .row-item.loaded {
@@ -211,8 +211,24 @@ h3 {
 
 .row-item.loaded .row-index,
 .row-item.loaded .row-page,
-.row-item.loaded .row-title,
-.row-item.loaded .row-file {
+.row-item.loaded .row-title {
+  opacity: 0.3;
+}
+
+.file-entry {
+  padding: 2px 8px !important;
+  margin: 1px 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.file-entry.sent {
+  background: rgba(52, 199, 89, 0.1);
+  border-color: rgba(52, 199, 89, 0.3);
+}
+
+.file-entry.loaded .row-file {
   opacity: 0.3;
 }
 
@@ -222,9 +238,23 @@ h3 {
 }
 
 @keyframes pulseGlow {
-  0% { box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.4); border-color: #ff9500; color: #ff9500; }
-  70% { box-shadow: 0 0 0 6px rgba(255, 149, 0, 0); border-color: rgba(255, 149, 0, 0.5); color: rgba(255, 149, 0, 0.7); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 149, 0, 0); border-color: #ff9500; color: #ff9500; }
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.4);
+    border-color: #ff9500;
+    color: #ff9500;
+  }
+
+  70% {
+    box-shadow: 0 0 0 6px rgba(255, 149, 0, 0);
+    border-color: rgba(255, 149, 0, 0.5);
+    color: rgba(255, 149, 0, 0.7);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 149, 0, 0);
+    border-color: #ff9500;
+    color: #ff9500;
+  }
 }
 
 .file-entry.placeholder-loaded .btn-run {
@@ -276,10 +306,11 @@ h3 {
 
 .row-item.no-media {
   opacity: 0.4;
-  padding: 2px 4px 2px 12px;
+  padding: 0px 4px 0px 12px;
   margin-bottom: 0px;
   background: rgba(255, 255, 255, 0.02);
-  align-items: center; /* Center everything when no media */
+  align-items: center;
+  /* Center everything when no media */
 }
 
 .row-item.no-media .row-index,
@@ -306,14 +337,14 @@ h3 {
   width: 40px;
   color: var(--text-secondary);
   font-size: 0.875rem;
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .row-page {
   width: 50px;
   font-weight: 500;
   color: var(--text-primary);
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .row-title {
@@ -322,7 +353,7 @@ h3 {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .row-file {
@@ -334,6 +365,7 @@ h3 {
   cursor: pointer;
   display: flex;
   align-items: center;
+  transform: translateY(-1px);
 }
 
 .row-file:hover {
@@ -346,12 +378,11 @@ h3 {
 
 input[type="text"].row-est-duration {
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   border: 1px solid transparent;
-  width: 48px;
+  width: 60px;
   box-sizing: border-box;
   font-family: monospace;
-  font-size: 1.25em;
   text-align: center;
   border-radius: 4px;
   margin: 0;
@@ -397,9 +428,10 @@ input[type="text"].row-est-duration:focus {
 
 .row-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   align-self: center;
-  margin-left: 16px;
+  margin-left: 8px;
 }
 
 .row-item .btn-run {
