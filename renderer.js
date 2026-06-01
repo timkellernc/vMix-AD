@@ -604,6 +604,14 @@ function appendRowItem(item, insertBeforeNode = null) {
   const row = document.createElement('div');
   row.className = 'row-item';
   row.id = `row-item-${itemCount}`;
+  if (item.rowId) row.dataset.rowId = item.rowId;
+  
+  let newFilesSig = '';
+  if (item.files) {
+    newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
+  }
+  if (item.isCustom) newFilesSig += '||CUSTOM';
+  row.dataset.filesSig = newFilesSig;
 
   if (item.isFloated) row.classList.add('floated');
   if (item.isBreak) row.classList.add('break');
@@ -1006,6 +1014,268 @@ function appendRowItem(item, insertBeforeNode = null) {
   return row;
 }
 
+function buildFilesHtml(item) {
+  let filesHtml = '';
+  if (item.files && item.files.length > 0) {
+    item.files.forEach((file, index) => {
+      let fallbackHtml = '';
+      if (file.isFallback) fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
+
+      const displayFile = file.originalFile;
+      const resolvedPath = file.resolvedPath;
+
+      let fileClass = 'row-file';
+      if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
+
+      let fileContent = '';
+      if (file.isCustom) {
+        const prefill = file.requestedFile || file.originalFile || '';
+        fileContent = `<input type="text" class="custom-source-input" data-file-index="${index}" placeholder="Type filename..." value="${prefill}" style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
+      } else {
+        fileContent = `${displayFile || ''} <span class="row-duration"></span> ${fallbackHtml}`;
+      }
+
+      filesHtml += `
+        <div class="file-entry" data-file-index="${index}" style="display: flex; align-items: center; padding: 4px 0;">
+          <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px;">
+            ${fileContent}
+          </div>
+          <button class="btn primary small btn-run" data-file-index="${index}">Load</button>
+        </div>
+      `;
+    });
+  } else {
+    let fileContent = '';
+    if (item.isCustom) {
+      fileContent = `<input type="text" class="custom-source-input" data-file-index="0" placeholder="Type filename..." style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
+    } else {
+      fileContent = `<span class="row-duration"></span>`;
+    }
+    filesHtml = `
+      <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
+        <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4;">
+          ${fileContent}
+        </div>
+        <button class="btn primary small btn-run" data-file-index="0" style="visibility: hidden;">Load</button>
+      </div>
+    `;
+  }
+  return filesHtml;
+}
+
+function attachFilesEventListeners(item, row) {
+  const customInputs = row.querySelectorAll('.custom-source-input');
+  customInputs.forEach(customInput => {
+    const fileIndex = parseInt(customInput.getAttribute('data-file-index'));
+    setTimeout(() => customInput.focus(), 50);
+
+    let finalized = false;
+    let isSyncing = false;
+    const finalizeCustomRow = async () => {
+      if (finalized || isSyncing) return;
+      isSyncing = true;
+      customInput.disabled = true; // Prevent multiple entries
+
+      const val = customInput.value.trim();
+
+      if (!val) {
+        if (item.files && item.files[fileIndex]) {
+          item.files.splice(fileIndex, 1);
+        }
+        if (!item.files || item.files.length === 0) item.isCustom = false;
+
+        const nextNode = row.nextSibling;
+        row.remove();
+        appendRowItem(item, nextNode);
+
+        const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
+        allDOMRows.forEach((rowNode, idx) => {
+          rowNode.id = `row-item-${idx + 1}`;
+          const indexDiv = rowNode.querySelector('.row-index');
+          if (indexDiv) indexDiv.innerText = idx + 1;
+        });
+        itemCount = allDOMRows.length;
+
+        // Sync to server after removing empty input
+        await syncRowFilesToServer(item);
+        finalized = true;
+        return;
+      }
+
+      // Optimistic local update
+      if (!item.files) item.files = [];
+      const targetFile = item.files[fileIndex] || { isNewInjection: false };
+      targetFile.isCustom = false;
+      targetFile.requestedFile = val;
+      const mediaInfo = await window.api.resolveMedia(val);
+      targetFile.originalFile = mediaInfo ? mediaInfo.path.split(/[\\/]/).pop() : val;
+      targetFile.resolvedPath = mediaInfo ? mediaInfo.path : null;
+      targetFile.isFallback = mediaInfo ? mediaInfo.isFallback : false;
+
+      if (!item.files[fileIndex]) item.files.push(targetFile);
+      item.isCustom = false;
+
+      const nextNode = row.nextSibling;
+      row.remove();
+      appendRowItem(item, nextNode);
+
+      const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
+      allDOMRows.forEach((rowNode, idx) => {
+        rowNode.id = `row-item-${idx + 1}`;
+        const indexDiv = rowNode.querySelector('.row-index');
+        if (indexDiv) indexDiv.innerText = idx + 1;
+      });
+      itemCount = allDOMRows.length;
+
+      await syncRowFilesToServer(item);
+      finalized = true;
+    };
+
+    customInput.addEventListener('blur', finalizeCustomRow);
+    customInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        customInput.blur();
+      }
+    });
+  });
+
+  const fileEntries = row.querySelectorAll('.file-entry');
+  fileEntries.forEach(entry => {
+    const fileIndex = parseInt(entry.getAttribute('data-file-index'));
+    const fileObj = (item.files && item.files[fileIndex]) ? item.files[fileIndex] : null;
+    if (!fileObj) return;
+
+    const btnRun = entry.querySelector('.btn-run');
+    const rowFile = entry.querySelector('.row-file');
+
+    if (fileObj.resolvedPath) {
+      rowFile.addEventListener('click', () => {
+        window.api.openFile(fileObj.resolvedPath);
+      });
+
+      // Fetch duration for this specific file using FFprobe via IPC
+      if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i)) {
+        window.api.getVideoDuration(fileObj.resolvedPath).then(duration => {
+          if (duration && !isNaN(duration)) {
+            const mins = Math.floor(duration / 60);
+            const secs = Math.floor(duration % 60).toString().padStart(2, '0');
+            const span = entry.querySelector('.row-duration');
+            if (span) span.innerText = `[${mins}:${secs}]`;
+          }
+        }).catch(err => console.error("Error getting duration for", fileObj.resolvedPath, err));
+      }
+    }
+
+    if (fileObj.isLoaded) {
+      entry.classList.add('loaded', 'sent');
+      if (fileObj.isPlaceholderLoaded) entry.classList.add('placeholder-loaded');
+      if (btnRun) {
+        btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : (fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded");
+        btnRun.classList.remove('primary');
+        btnRun.classList.add('success');
+      }
+    } else if (!fileObj.resolvedPath && btnRun) {
+      // Allow button to remain active so it can load a placeholder and trigger auto-search
+      btnRun.disabled = false;
+      btnRun.style.opacity = '1';
+      btnRun.innerText = "Load";
+    }
+
+    if (btnRun) {
+      btnRun.addEventListener('click', async () => {
+        if (btnRun.innerText === "Sending...") return;
+
+        enqueueVmixAction(async () => {
+          btnRun.innerText = "Sending...";
+          const slotToUse = parseInt(inCurrentIndex.value) || 1;
+
+          if (inProtectProgram.checked) {
+            const activeTitle = await getVmixActiveSlotTitle();
+            const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
+            if (activeTitle && activeTitle === targetTitle) {
+              btnRun.innerText = "Load";
+              showToast(`Load Aborted: <strong>${targetTitle}</strong> is currently LIVE on Program!`);
+              return;
+            }
+          }
+
+          // Use fileObj instead of item for sendToVmix
+          const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
+          const result = await sendToVmix(dummyItemForVmix, slotToUse);
+
+          if (result) {
+            btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : `Loaded [${slotToUse}]`;
+            btnRun.classList.remove('primary');
+            btnRun.classList.add('success');
+            entry.classList.add('loaded', 'sent');
+            if (fileObj.isPlaceholderLoaded) entry.classList.add('placeholder-loaded');
+            
+            fileObj.isLoaded = true;
+            item.isLoaded = true;
+            row.classList.add('loaded', 'sent');
+          } else {
+            btnRun.innerText = "Load";
+          }
+        });
+      });
+    }
+  });
+}
+
+function updateRowItem(item, row, newIndex) {
+  row.id = `row-item-${newIndex}`;
+  if (item.rowId) row.dataset.rowId = item.rowId;
+
+  row.classList.toggle('floated', !!item.isFloated);
+  row.classList.toggle('break', !!item.isBreak);
+  row.classList.toggle('no-media', !item.files || item.files.length === 0);
+  row.classList.toggle('loaded', !!item.isLoaded);
+  row.classList.toggle('sent', !!item.isLoaded);
+
+  const indexEl = row.querySelector('.row-index');
+  if (indexEl) indexEl.innerText = newIndex;
+
+  const pageEl = row.querySelector('.row-page');
+  if (pageEl && pageEl.innerText !== (item.page || '')) pageEl.innerText = item.page || '';
+
+  const titleEl = row.querySelector('.row-title');
+  const newTitle = `${item.slug} ${item.segment || ''}`.trim();
+  if (titleEl && titleEl.innerText !== newTitle) {
+    titleEl.innerText = newTitle;
+    titleEl.title = newTitle;
+  }
+
+  const estDurEl = row.querySelector('.row-est-duration');
+  const newDur = formatDuration(item.estDuration);
+  if (estDurEl && estDurEl.value !== newDur && document.activeElement !== estDurEl) {
+    estDurEl.value = newDur;
+  }
+
+  const frontEl = row.querySelector('.row-front-time');
+  const newFront = formatTimeOfDay(item.frontTime);
+  if (frontEl && frontEl.innerText !== newFront) frontEl.innerText = newFront;
+
+  const backEl = row.querySelector('.row-back-time');
+  const newBack = formatTimeOfDay(item.backTime);
+  if (backEl && backEl.innerText !== newBack) backEl.innerText = newBack;
+
+  let newFilesSig = '';
+  if (item.files) {
+    newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
+  }
+  if (item.isCustom) newFilesSig += '||CUSTOM';
+
+  if (row.dataset.filesSig !== newFilesSig) {
+    const filesContainer = row.querySelector('.row-files-container');
+    if (filesContainer) {
+      filesContainer.innerHTML = buildFilesHtml(item);
+      attachFilesEventListeners(item, row);
+      row.dataset.filesSig = newFilesSig;
+    }
+  }
+}
+
 function renderRows(items) {
   let parsedItems = [...items];
 
@@ -1027,13 +1297,50 @@ function renderRows(items) {
   }
 
   globalParsedItems = parsedItems;
-  rundownList.innerHTML = '';
-  itemCount = 0;
-  if (items.length === 0) {
+
+  const empty = rundownList.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  if (globalParsedItems.length === 0) {
     rundownList.innerHTML = '<div class="empty-state"><p>No items found.</p></div>';
+    itemCount = 0;
     return;
   }
-  globalParsedItems.forEach(item => appendRowItem(item));
+
+  const existingRowsMap = new Map();
+  const existingRows = Array.from(rundownList.querySelectorAll('.row-item'));
+  existingRows.forEach(row => {
+    if (row.dataset.rowId) existingRowsMap.set(String(row.dataset.rowId), row);
+  });
+
+  itemCount = 0;
+  let currentDOMNode = rundownList.firstElementChild;
+
+  for (let i = 0; i < globalParsedItems.length; i++) {
+    const item = globalParsedItems[i];
+    const rowIdStr = String(item.rowId);
+
+    if (rowIdStr && existingRowsMap.has(rowIdStr)) {
+      const existingRow = existingRowsMap.get(rowIdStr);
+      existingRowsMap.delete(rowIdStr);
+      
+      itemCount++;
+      updateRowItem(item, existingRow, itemCount);
+      
+      if (currentDOMNode !== existingRow) {
+        rundownList.insertBefore(existingRow, currentDOMNode);
+      } else {
+        currentDOMNode = currentDOMNode.nextElementSibling;
+      }
+    } else {
+      appendRowItem(item, currentDOMNode); 
+      // appendRowItem automatically increments itemCount, but doesn't advance currentDOMNode 
+      // because it inserts *before* currentDOMNode, so currentDOMNode remains pointing to the next old element.
+    }
+  }
+
+  // Remove rows that no longer exist
+  existingRowsMap.forEach(row => row.remove());
 }
 
 // Batch Functions
@@ -1365,6 +1672,43 @@ activeRundownTitle.addEventListener('click', async () => {
   }
 });
 
+let autoRefreshInterval = null;
+window.lastRundownSignature = null;
+
+function getApiRowsSignature(apiRows) {
+  return JSON.stringify(apiRows.map(r => ({
+    id: r.RowID || r.ID || r.id || '',
+    slug: r.StorySlug || '',
+    script: r.Script || r.Body || r.StoryBody || '',
+    est: r.EstimatedDuration || r.Duration || 0,
+    page: r.PageNumber || '',
+    type: r.Type || r.RowType || '',
+    file: r.file || r.source || '',
+    floated: r.Floated || ''
+  })));
+}
+
+function startAutoRefreshPolling() {
+  if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+  autoRefreshInterval = setInterval(async () => {
+    if (!activeRundownId || btnRefreshRundown.disabled) return;
+    
+    try {
+      let res = await window.api.rundownRequest('getRows', { RundownID: activeRundownId });
+      if (res.success) {
+        const currentSig = getApiRowsSignature(res.data);
+        if (window.lastRundownSignature && currentSig !== window.lastRundownSignature) {
+          btnRefreshRundown.classList.add('pulse-refresh');
+        } else {
+          btnRefreshRundown.classList.remove('pulse-refresh');
+        }
+      }
+    } catch(e) {
+      console.error("Auto-refresh poll failed", e);
+    }
+  }, 10000);
+}
+
 async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '') {
   if (!rundownId) return;
   activeRundownId = rundownId;
@@ -1405,7 +1749,9 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
   }
 
   modalRundowns.classList.remove('visible');
-  rundownList.innerHTML = '<div class="empty-state"><p>Loading rundown rows...</p></div>';
+  if (!preserveState) {
+    rundownList.innerHTML = '<div class="empty-state"><p>Loading rundown rows...</p></div>';
+  }
 
   try {
     if (!preserveState) {
@@ -1490,6 +1836,10 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
     }
 
     renderRows(parsedItems);
+
+    window.lastRundownSignature = getApiRowsSignature(res.data);
+    btnRefreshRundown.classList.remove('pulse-refresh');
+    startAutoRefreshPolling();
 
     if (preserveState && contentDiv) {
       requestAnimationFrame(() => {
