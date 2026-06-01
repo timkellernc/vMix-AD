@@ -70,6 +70,17 @@ const inFirstLoc = document.getElementById('setting-firstloc');
 const inPoolSize = document.getElementById('setting-poolsize');
 const inProtectProgram = document.getElementById('setting-protect-program');
 const inUse24Hr = document.getElementById('setting-use-24hr');
+const inAutomationColumn = document.getElementById('setting-automation-column');
+
+const btnOpenMappings = document.getElementById('btn-open-mappings');
+const modalAutomationMappings = document.getElementById('modal-automation-mappings');
+const btnCloseMappings = document.getElementById('btn-close-mappings');
+const btnCancelMappings = document.getElementById('btn-cancel-mappings');
+const btnSaveMappings = document.getElementById('btn-save-mappings');
+const btnAddMapping = document.getElementById('btn-add-mapping');
+const mappingsTbody = document.getElementById('mappings-tbody');
+
+let automationMappings = [];
 const scanResult = document.getElementById('scan-result');
 
 let globalParsedItems = []; // Store parsed items to support batch loading
@@ -78,6 +89,7 @@ let globalSlotMap = {}; // Maps slotIndex -> item object currently in that slot
 let activeRundownId = null;
 
 let timerPollTimeout = null;
+let currentAutomationColumnName = 'Switcher';
 let activeOnAirRowId = null;
 let activeOnAirStartDate = null;
 let activeRundownStartTime = null;
@@ -121,7 +133,15 @@ async function init(isStartup = false) {
   inFirstLoc.value = settings.firstInputLocation || 9;
   inPoolSize.value = settings.poolSize || 15;
   inProtectProgram.checked = settings.protectProgram !== false; // Default to true
+  inUse24Hr.checked = settings.use24Hr === true;
+  currentAutomationColumnName = settings.automationColumnName || 'Switcher';
+  inAutomationColumn.value = currentAutomationColumnName;
+  automationMappings = settings.automationMappings || [];
   inUse24Hr.checked = settings.use24Hr === true; // Default to false (12hr)
+  
+  if (activeRundownId) {
+    btnRefreshRundown.click();
+  }
 
   const defaultBuses = settings.audioBuses || ['A', 'B'];
   const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]');
@@ -269,7 +289,9 @@ btnSaveSettings.addEventListener('click', async () => {
     poolSize: parseInt(inPoolSize.value) || 15,
     protectProgram: inProtectProgram.checked,
     use24Hr: inUse24Hr.checked,
-    audioBuses: selectedBuses
+    audioBuses: selectedBuses,
+    automationColumnName: inAutomationColumn.value,
+    automationMappings: automationMappings
   };
   await window.api.saveSettings(settings);
 
@@ -288,6 +310,73 @@ btnSelectDefaultsdir.addEventListener('click', async () => {
   const dir = await window.api.selectDirectory();
   if (dir) inDefaultsdir.value = dir;
 });
+
+// Automation Mappings Modal Logic
+btnOpenMappings.addEventListener('click', () => {
+  renderMappingsTable();
+  modalAutomationMappings.classList.add('visible');
+});
+
+btnCloseMappings.addEventListener('click', () => modalAutomationMappings.classList.remove('visible'));
+btnCancelMappings.addEventListener('click', () => modalAutomationMappings.classList.remove('visible'));
+
+btnSaveMappings.addEventListener('click', async () => {
+  const rows = mappingsTbody.querySelectorAll('tr');
+  const newMappings = [];
+  rows.forEach(row => {
+    const prefix = row.querySelector('.map-prefix').value.trim();
+    if (!prefix) return;
+    newMappings.push({
+      prefix: prefix,
+      type: row.querySelector('.map-type').value,
+      function: row.querySelector('.map-func').value.trim(),
+      target: row.querySelector('.map-target').value.trim()
+    });
+  });
+  
+  automationMappings = newMappings;
+  modalAutomationMappings.classList.remove('visible');
+});
+
+btnAddMapping.addEventListener('click', () => {
+  addMappingRow({ prefix: '', type: 'Input', function: 'Cut', target: '' });
+});
+
+function renderMappingsTable() {
+  mappingsTbody.innerHTML = '';
+  if (automationMappings.length === 0) {
+    // Add default examples if empty
+    addMappingRow({ prefix: 'C', type: 'Input', function: 'Cut', target: 'Camera 1' });
+    addMappingRow({ prefix: 'M', type: 'Mic', function: 'AudioOn', target: 'Anchor Mic' });
+    addMappingRow({ prefix: 'CG', type: 'Overlay', function: 'OverlayInput1In', target: 'LowerThird.gtzip' });
+    addMappingRow({ prefix: 'CGO', type: 'Overlay', function: 'OverlayInput1Out', target: 'LowerThird.gtzip' });
+    addMappingRow({ prefix: 'D', type: 'Transition', function: 'Fade', target: '' });
+  } else {
+    automationMappings.forEach(m => addMappingRow(m));
+  }
+}
+
+function addMappingRow(mapping) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" class="map-prefix" value="${mapping.prefix}" placeholder="e.g. C" style="width: 60px;"></td>
+    <td>
+      <select class="map-type">
+        <option value="Input" ${mapping.type==='Input'?'selected':''}>Input (Camera/Video)</option>
+        <option value="Mic" ${mapping.type==='Mic'?'selected':''}>Microphone</option>
+        <option value="Overlay" ${mapping.type==='Overlay'?'selected':''}>Overlay (CG)</option>
+        <option value="Transition" ${mapping.type==='Transition'?'selected':''}>Transition</option>
+        <option value="Destination" ${mapping.type==='Destination'?'selected':''}>Destination (Monitor/Mix)</option>
+      </select>
+    </td>
+    <td><input type="text" class="map-func" value="${mapping.function}" placeholder="e.g. Cut" style="width: 120px;"></td>
+    <td><input type="text" class="map-target" value="${mapping.target}" placeholder="e.g. Camera 1" style="width: 150px;"></td>
+    <td><button class="btn danger small btn-remove-mapping">&times;</button></td>
+  `;
+  tr.querySelector('.btn-remove-mapping').addEventListener('click', () => tr.remove());
+  mappingsTbody.appendChild(tr);
+}
+
 
 btnScanDefaults.addEventListener('click', async () => {
   scanResult.innerText = "Scanning...";
@@ -357,25 +446,31 @@ function showToast(message, type = 'error') {
   }, 4000);
 }
 
-async function getVmixActiveSlotTitle() {
+async function getVmixActiveSlotTitles() {
   try {
     const res = await window.api.vmixRequest('');
-    if (!res.success) return null;
+    if (!res.success) return [];
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(res.data, "text/xml");
-    const activeNode = doc.querySelector('active');
-    if (!activeNode) return null;
-
-    const activeNumber = activeNode.textContent;
-    const inputNode = doc.querySelector(`input[number="${activeNumber}"]`);
-    if (inputNode) {
-      return inputNode.getAttribute('title');
-    }
+    
+    // Find ALL <active> nodes (Program + any Mixes)
+    const activeNodes = doc.querySelectorAll('active');
+    const titles = [];
+    
+    activeNodes.forEach(node => {
+      const activeNumber = node.textContent;
+      const inputNode = doc.querySelector(`input[number="${activeNumber}"]`);
+      if (inputNode) {
+        titles.push(inputNode.getAttribute('title'));
+      }
+    });
+    
+    return titles;
   } catch (err) {
-    console.error("Failed to parse vMix active slot:", err);
+    console.error("Failed to parse vMix active slots:", err);
   }
-  return null;
+  return [];
 }
 
 // vMix Execution
@@ -418,6 +513,10 @@ async function sendToVmix(item, slotIndex) {
   }
   globalSlotMap[slotIndex] = item;
   item.loadedSlot = slotIndex;
+  if (item._sourceFileObj) {
+    item._sourceFileObj.loadedSlot = slotIndex;
+    item._sourceFileObj.isLoaded = true;
+  }
 
   let targetPath = item.resolvedPath;
   let isPlaceholder = false;
@@ -606,7 +705,7 @@ function appendRowItem(item, insertBeforeNode = null) {
   row.id = `row-item-${itemCount}`;
   if (item.rowId) row.dataset.rowId = item.rowId;
   
-  let newFilesSig = '';
+  let newFilesSig = item.automationCode || '';
   if (item.files) {
     newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
@@ -618,58 +717,15 @@ function appendRowItem(item, insertBeforeNode = null) {
   if (!item.files || item.files.length === 0) row.classList.add('no-media');
   if (item.isLoaded) row.classList.add('loaded', 'sent');
 
-  let filesHtml = '';
-  if (item.files && item.files.length > 0) {
-    item.files.forEach((file, index) => {
-      let fallbackHtml = '';
-      if (file.isFallback) fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
-
-      const displayFile = file.originalFile;
-      const resolvedPath = file.resolvedPath;
-
-      let fileClass = 'row-file';
-      if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
-
-      let fileContent = '';
-      if (file.isCustom) {
-        const prefill = file.requestedFile || file.originalFile || '';
-        fileContent = `<input type="text" class="custom-source-input" data-file-index="${index}" placeholder="Type filename..." value="${prefill}" style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
-      } else {
-        fileContent = `${displayFile || ''} <span class="row-duration"></span> ${fallbackHtml}`;
-      }
-
-      filesHtml += `
-        <div class="file-entry" data-file-index="${index}" style="display: flex; align-items: center; padding: 4px 0;">
-          <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px;">
-            ${fileContent}
-          </div>
-          <button class="btn primary small btn-run" data-file-index="${index}">Load</button>
-        </div>
-      `;
-    });
-  } else {
-    let fileContent = '';
-    if (item.isCustom) {
-      fileContent = `<input type="text" class="custom-source-input" data-file-index="0" placeholder="Type filename..." style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
-    } else {
-      fileContent = `<span class="row-duration"></span>`;
-    }
-    filesHtml = `
-      <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
-        <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4;">
-          ${fileContent}
-        </div>
-        <button class="btn primary small btn-run" data-file-index="0" style="visibility: hidden;">Load</button>
-      </div>
-    `;
-  }
-
   row.innerHTML = `
     <div class="row-index">${itemCount}</div>
     <div class="row-page">${item.page || ''}</div>
     <div class="row-title" title="${item.slug} ${item.segment}">${item.slug} ${item.segment || ''}</div>
-    <div class="row-files-container" style="flex: 4; display: flex; flex-direction: column;">
-      ${filesHtml}
+    <div class="row-auto-container" style="width: 140px; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; padding: 0 8px;">
+      ${buildAutoHtml(item)}
+    </div>
+    <div class="row-files-container" style="flex: 4; display: flex; flex-direction: column; min-width: 0;">
+      ${buildFilesHtml(item)}
     </div>
     <div class="row-actions">
       <input type="text" class="row-est-duration" value="${formatDuration(item.estDuration)}" title="Est. Duration (click to edit)" />
@@ -678,176 +734,8 @@ function appendRowItem(item, insertBeforeNode = null) {
     </div>
   `;
 
-  const customInputs = row.querySelectorAll('.custom-source-input');
-  customInputs.forEach(customInput => {
-    const fileIndex = parseInt(customInput.getAttribute('data-file-index'));
-    setTimeout(() => customInput.focus(), 50);
+  attachFilesEventListeners(item, row);
 
-    let finalized = false;
-    let isSyncing = false;
-    const finalizeCustomRow = async () => {
-      if (finalized || isSyncing) return;
-      isSyncing = true;
-      customInput.disabled = true; // Prevent multiple entries
-
-      const val = customInput.value.trim();
-
-      if (!val) {
-        if (item.files && item.files[fileIndex]) {
-          item.files.splice(fileIndex, 1);
-        }
-        if (!item.files || item.files.length === 0) item.isCustom = false;
-
-        const nextNode = row.nextSibling;
-        row.remove();
-        appendRowItem(item, nextNode);
-
-        const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
-        allDOMRows.forEach((rowNode, idx) => {
-          rowNode.id = `row-item-${idx + 1}`;
-          const indexDiv = rowNode.querySelector('.row-index');
-          if (indexDiv) indexDiv.innerText = idx + 1;
-        });
-        itemCount = allDOMRows.length;
-
-        // Sync to server after removing empty input
-        await syncRowFilesToServer(item);
-        finalized = true;
-        return;
-      }
-
-      // Optimistic local update
-      if (!item.files) item.files = [];
-      const targetFile = item.files[fileIndex] || { isNewInjection: false };
-      targetFile.isCustom = false;
-      targetFile.requestedFile = val;
-      const mediaInfo = await window.api.resolveMedia(val);
-      targetFile.originalFile = mediaInfo ? mediaInfo.path.split(/[\\/]/).pop() : val;
-      targetFile.resolvedPath = mediaInfo ? mediaInfo.path : null;
-      targetFile.isFallback = mediaInfo ? mediaInfo.isFallback : false;
-
-      if (!item.files[fileIndex]) item.files.push(targetFile);
-      item.isCustom = false;
-
-      const nextNode = row.nextSibling;
-      row.remove();
-      appendRowItem(item, nextNode);
-
-      const allDOMRows = Array.from(rundownList.querySelectorAll('.row-item'));
-      allDOMRows.forEach((rowNode, idx) => {
-        rowNode.id = `row-item-${idx + 1}`;
-        const indexDiv = rowNode.querySelector('.row-index');
-        if (indexDiv) indexDiv.innerText = idx + 1;
-      });
-      itemCount = allDOMRows.length;
-
-      await syncRowFilesToServer(item);
-      finalized = true;
-    };
-
-    customInput.addEventListener('blur', finalizeCustomRow);
-    customInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        customInput.blur();
-      }
-    });
-  });
-
-  const fileEntries = row.querySelectorAll('.file-entry');
-  fileEntries.forEach(entry => {
-    const fileIndex = parseInt(entry.getAttribute('data-file-index'));
-    const fileObj = (item.files && item.files[fileIndex]) ? item.files[fileIndex] : null;
-    if (!fileObj) return;
-
-    const btnRun = entry.querySelector('.btn-run');
-    const rowFile = entry.querySelector('.row-file');
-
-    if (fileObj.resolvedPath) {
-      rowFile.addEventListener('click', () => {
-        window.api.openFile(fileObj.resolvedPath);
-      });
-
-      // Fetch duration for this specific file using FFprobe via IPC
-      if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i)) {
-        window.api.getVideoDuration(fileObj.resolvedPath).then(duration => {
-          if (duration && !isNaN(duration)) {
-            const mins = Math.floor(duration / 60);
-            const secs = Math.floor(duration % 60).toString().padStart(2, '0');
-            const span = entry.querySelector('.row-duration');
-            if (span) span.innerText = `[${mins}:${secs}]`;
-          }
-        }).catch(err => console.error("Error getting duration for", fileObj.resolvedPath, err));
-      }
-    }
-
-    if (fileObj.isLoaded) {
-      entry.classList.add('loaded', 'sent');
-      if (fileObj.isPlaceholderLoaded) entry.classList.add('placeholder-loaded');
-      if (btnRun) {
-        btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : (fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded");
-        btnRun.classList.remove('primary');
-        btnRun.classList.add('success');
-      }
-    } else if (!fileObj.resolvedPath && btnRun) {
-      // Allow button to remain active so it can load a placeholder and trigger auto-search
-      btnRun.disabled = false;
-      btnRun.style.opacity = '1';
-      btnRun.innerText = "Load";
-    }
-
-    if (btnRun) {
-      btnRun.addEventListener('click', async () => {
-        if (btnRun.innerText === "Sending...") return;
-
-        enqueueVmixAction(async () => {
-          btnRun.innerText = "Sending...";
-          const slotToUse = parseInt(inCurrentIndex.value) || 1;
-
-          if (inProtectProgram.checked) {
-            const activeTitle = await getVmixActiveSlotTitle();
-            const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
-            if (activeTitle && activeTitle === targetTitle) {
-              btnRun.innerText = "Load";
-              showToast(`Load Aborted: <strong>${targetTitle}</strong> is currently LIVE on Program!`);
-              return;
-            }
-          }
-
-          // Use fileObj instead of item for sendToVmix
-          const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
-          await sendToVmix(dummyItemForVmix, slotToUse);
-
-          // Sync state back from sendToVmix to the actual file object
-          fileObj.isLoaded = dummyItemForVmix.isLoaded;
-          fileObj.loadedSlot = dummyItemForVmix.loadedSlot;
-          fileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
-
-          // Re-update visual state
-          if (btnRun) {
-            entry.classList.add('loaded', 'sent');
-            if (fileObj.isPlaceholderLoaded) {
-              entry.classList.add('placeholder-loaded');
-              btnRun.innerText = "Searching...";
-            } else {
-              entry.classList.remove('placeholder-loaded');
-              btnRun.innerText = fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded";
-            }
-            btnRun.classList.remove('primary');
-            btnRun.classList.add('success');
-            // Remove skipped styles if they were applied
-            btnRun.style.borderColor = '';
-            btnRun.style.color = '';
-            btnRun.style.animation = '';
-          }
-          let nextSlot = slotToUse + 1;
-          const poolSize = parseInt(inPoolSize.value) || 15;
-          if (nextSlot > poolSize) nextSlot = 1;
-          inCurrentIndex.value = nextSlot;
-        });
-      });
-    }
-  });
 
   const estInput = row.querySelector('.row-est-duration');
   if (estInput) {
@@ -1014,8 +902,20 @@ function appendRowItem(item, insertBeforeNode = null) {
   return row;
 }
 
+function buildAutoHtml(item) {
+  if (!item.automationCode) return '';
+  const autoCommands = item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0);
+  let html = '';
+  autoCommands.forEach(cmd => {
+    html += `<button class="btn primary small btn-run-auto" data-auto-cmd="${cmd}" style="margin: 2px;">${cmd}</button>`;
+  });
+  return html;
+}
+
 function buildFilesHtml(item) {
   let filesHtml = '';
+
+  // Render file entries
   if (item.files && item.files.length > 0) {
     item.files.forEach((file, index) => {
       let fallbackHtml = '';
@@ -1027,6 +927,16 @@ function buildFilesHtml(item) {
       let fileClass = 'row-file';
       if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
 
+      let btnText = 'LOAD';
+      let btnClass = 'primary';
+      if (file.isPlaceholderLoaded) {
+        btnText = 'Searching...';
+        btnClass = 'success';
+      } else if (file.isLoaded) {
+        btnText = file.loadedSlot ? `Loaded [${file.loadedSlot}]` : 'Loaded';
+        btnClass = 'success';
+      }
+
       let fileContent = '';
       if (file.isCustom) {
         const prefill = file.requestedFile || file.originalFile || '';
@@ -1037,33 +947,59 @@ function buildFilesHtml(item) {
 
       filesHtml += `
         <div class="file-entry" data-file-index="${index}" style="display: flex; align-items: center; padding: 4px 0;">
-          <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px;">
+          <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px; min-width: 0;">
             ${fileContent}
           </div>
-          <button class="btn primary small btn-run" data-file-index="${index}">Load</button>
+          <button class="btn ${btnClass} small btn-run btn-run-file" data-file-index="${index}">${btnText}</button>
         </div>
       `;
     });
   } else {
-    let fileContent = '';
+    // Row has no files, but might have custom input empty state or duration
     if (item.isCustom) {
-      fileContent = `<input type="text" class="custom-source-input" data-file-index="0" placeholder="Type filename..." style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
-    } else {
-      fileContent = `<span class="row-duration"></span>`;
-    }
-    filesHtml = `
-      <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
-        <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4;">
-          ${fileContent}
+      filesHtml += `
+        <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
+          <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4; min-width: 0;">
+            <input type="text" class="custom-source-input" data-file-index="0" placeholder="Type filename..." style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />
+          </div>
+          <button class="btn primary small btn-run btn-run-file" data-file-index="0">LOAD</button>
         </div>
-        <button class="btn primary small btn-run" data-file-index="0" style="visibility: hidden;">Load</button>
-      </div>
-    `;
+      `;
+    } else {
+      filesHtml += `
+        <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
+          <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4;">
+            <span class="row-duration"></span>
+          </div>
+        </div>
+      `;
+    }
   }
   return filesHtml;
 }
 
 function attachFilesEventListeners(item, row) {
+  // Attach Automation Button Listeners
+  const autoBtns = row.querySelectorAll('.btn-run-auto');
+  autoBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.innerText === "Sending...") return;
+      const specificCmd = btn.dataset.autoCmd;
+      if (!specificCmd) return;
+      
+      btn.innerText = "Sending...";
+      const parsedTokens = parseAutomationCode(specificCmd);
+      executeTake(item, parsedTokens, row).then(() => {
+        btn.innerText = specificCmd;
+        btn.classList.remove('primary', 'danger');
+        btn.classList.add('success');
+      }).catch(err => {
+        console.error("Automation error:", err);
+        btn.innerText = "ERROR";
+      });
+    });
+  });
+
   const customInputs = row.querySelectorAll('.custom-source-input');
   customInputs.forEach(customInput => {
     const fileIndex = parseInt(customInput.getAttribute('data-file-index'));
@@ -1146,7 +1082,7 @@ function attachFilesEventListeners(item, row) {
     const fileObj = (item.files && item.files[fileIndex]) ? item.files[fileIndex] : null;
     if (!fileObj) return;
 
-    const btnRun = entry.querySelector('.btn-run');
+    const btnRun = entry.querySelector('.btn-run-file');
     const rowFile = entry.querySelector('.row-file');
 
     if (fileObj.resolvedPath) {
@@ -1188,32 +1124,25 @@ function attachFilesEventListeners(item, row) {
 
         enqueueVmixAction(async () => {
           btnRun.innerText = "Sending...";
-          const slotToUse = parseInt(inCurrentIndex.value) || 1;
-
-          if (inProtectProgram.checked) {
-            const activeTitle = await getVmixActiveSlotTitle();
-            const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
-            if (activeTitle && activeTitle === targetTitle) {
-              btnRun.innerText = "Load";
-              showToast(`Load Aborted: <strong>${targetTitle}</strong> is currently LIVE on Program!`);
-              return;
-            }
-          }
+          const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+          const slotToUse = await getSafeSlot(baseSlotToUse);
+          inCurrentIndex.value = slotToUse + 1;
 
           // Use fileObj instead of item for sendToVmix
           const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
           const result = await sendToVmix(dummyItemForVmix, slotToUse);
 
-          if (result) {
+          if (result !== false) { // If it didn't explicitly fail
             btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : `Loaded [${slotToUse}]`;
             btnRun.classList.remove('primary');
             btnRun.classList.add('success');
-            entry.classList.add('loaded', 'sent');
-            if (fileObj.isPlaceholderLoaded) entry.classList.add('placeholder-loaded');
-            
             fileObj.isLoaded = true;
-            item.isLoaded = true;
-            row.classList.add('loaded', 'sent');
+            fileObj.isLoading = false;
+
+            if (item.files.every(f => f.isLoaded)) {
+              item.isLoaded = true;
+              row.classList.add('loaded', 'sent');
+            }
           } else {
             btnRun.innerText = "Load";
           }
@@ -1260,7 +1189,7 @@ function updateRowItem(item, row, newIndex) {
   const newBack = formatTimeOfDay(item.backTime);
   if (backEl && backEl.innerText !== newBack) backEl.innerText = newBack;
 
-  let newFilesSig = '';
+  let newFilesSig = item.automationCode || '';
   if (item.files) {
     newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
@@ -1270,6 +1199,8 @@ function updateRowItem(item, row, newIndex) {
     const filesContainer = row.querySelector('.row-files-container');
     if (filesContainer) {
       filesContainer.innerHTML = buildFilesHtml(item);
+      const autoContainer = row.querySelector('.row-auto-container');
+      if (autoContainer) autoContainer.innerHTML = buildAutoHtml(item);
       attachFilesEventListeners(item, row);
       row.dataset.filesSig = newFilesSig;
     }
@@ -1376,24 +1307,15 @@ async function processBatch(count, limitToSegment = false) {
       }
 
       fileObj.isLoading = true; // Mark instantly to prevent concurrent double-loads
-      const slotToUse = parseInt(inCurrentIndex.value) || 1;
+      const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
 
       // Find DOM button to update UI
       const row = document.getElementById(`row-item-${i + 1}`);
       const entry = row ? row.querySelector(`.file-entry[data-file-index="${fIdx}"]`) : null;
       const btn = entry ? entry.querySelector('.btn-run') : null;
 
-      // Program Protection Check
-      if (inProtectProgram.checked) {
-        const activeTitle = await getVmixActiveSlotTitle();
-        const targetTitle = `${inPrefix.value || 'Video'} ${slotToUse}`;
-        if (activeTitle && activeTitle === targetTitle) {
-          fileObj.isLoading = false;
-          if (btn) btn.innerText = "Load";
-          showToast(`Batch Aborted: <strong>${targetTitle}</strong> is currently LIVE on Program!`);
-          return; // Stop the entire batch load
-        }
-      }
+      const slotToUse = await getSafeSlot(baseSlotToUse);
+      inCurrentIndex.value = slotToUse + 1;
 
       if (btn) btn.innerText = "Sending...";
 
@@ -1489,6 +1411,12 @@ btnLoadElement.addEventListener('click', () => {
   enqueueVmixAction(async () => {
     await processBatch(1, false);
   });
+});
+
+currentAutomationColumnName = inAutomationColumn.value;
+inAutomationColumn.addEventListener('change', () => {
+  currentAutomationColumnName = inAutomationColumn.value;
+  btnRefreshRundown.click();
 });
 
 inCurrentIndex.addEventListener('change', () => {
@@ -1676,6 +1604,7 @@ let autoRefreshInterval = null;
 window.lastRundownSignature = null;
 
 function getApiRowsSignature(apiRows) {
+  const colNameLower = (currentAutomationColumnName || inAutomationColumn.value || 'Switcher').toLowerCase();
   return JSON.stringify(apiRows.map(r => ({
     id: r.RowID || r.ID || r.id || '',
     slug: r.StorySlug || '',
@@ -1683,8 +1612,12 @@ function getApiRowsSignature(apiRows) {
     est: r.EstimatedDuration || r.Duration || 0,
     page: r.PageNumber || '',
     type: r.Type || r.RowType || '',
-    file: r.file || r.source || '',
-    floated: r.Floated || ''
+    file: r.file || r.source || r.Source || r.File || '',
+    floated: r.Floated || '',
+    autoCode: (() => {
+      const rowKey = Object.keys(r).find(k => k.toLowerCase() === colNameLower);
+      return rowKey ? r[rowKey] : '';
+    })()
   })));
 }
 
@@ -1775,12 +1708,16 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
     const parsedItems = [];
 
     for (const row of rows) {
-      const fileField = row.file || row.source || '';
+      const fileField = row.file || row.source || row.Source || row.File || '';
       const slugField = row.StorySlug || '';
       const scriptField = row.Script || row.Body || row.StoryBody || '';
       const rowIdField = row.RowID || row.ID || row.id || '';
+      
+      const colNameLower = (currentAutomationColumnName || inAutomationColumn.value || 'Switcher').toLowerCase();
+      const automationRowKey = Object.keys(row).find(k => k.toLowerCase() === colNameLower);
+      const automationCode = automationRowKey ? row[automationRowKey] : '';
 
-      if (!fileField && !slugField) continue;
+      if (!fileField && !slugField && !automationCode) continue;
 
       const fileNames = fileField.split(',').map(s => s.trim()).filter(s => s.length > 0);
       const isFloated = row.Floated === 1 || String(row.Floated) === "1" || String(row.Floated).toLowerCase() === 'true';
@@ -1831,7 +1768,8 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
         isLoaded: rowWasLoaded,
         isPlaceholderLoaded: false,
         loadedSlot: null,
-        isBreak: isBreak
+        isBreak: isBreak,
+        automationCode: automationCode
       });
     }
 
@@ -2831,3 +2769,315 @@ async function startTimerOnPrevRow() {
     }
   }
 }
+
+// --- Switcher Automation ---
+function parseAutomationCode(codeString) {
+  if (!codeString) return [];
+  const commands = [];
+  
+  const segments = codeString.split(';');
+  
+  for (let segment of segments) {
+    let text = segment.replace(/\s+/g, '').toUpperCase();
+    if (!text) continue;
+    
+    const sortedMappings = [...automationMappings].sort((a, b) => b.prefix.length - a.prefix.length);
+    
+    const macros = [
+      { prefix: 'SOT', type: 'Macro', function: 'SOT', target: '' },
+      { prefix: 'VO', type: 'Macro', function: 'VO', target: '' },
+      { prefix: 'V', type: 'Macro', function: 'VO', target: '' },
+      { prefix: 'MOFF', type: 'Macro', function: 'MOFF', target: '' },
+      { prefix: 'MO', type: 'Macro', function: 'MOFF', target: '' },
+      { prefix: 'CGOFF', type: 'Macro', function: 'CGOFF', target: '' }
+    ].sort((a, b) => b.prefix.length - a.prefix.length);
+    
+    const allTokens = [...macros, ...sortedMappings].sort((a, b) => b.prefix.length - a.prefix.length);
+    
+    let parsedTokens = [];
+    while (text.length > 0) {
+      let matched = false;
+      for (const token of allTokens) {
+        if (text.startsWith(token.prefix.toUpperCase())) {
+          const remaining = text.substring(token.prefix.length);
+          const numMatch = remaining.match(/^(\d+)/);
+          const num = numMatch ? parseInt(numMatch[1], 10) : null;
+          
+          let advancedRemaining = remaining.substring(num ? String(num).length : 0);
+          let isOff = false;
+          
+          if (token.type === 'Overlay') {
+            if (advancedRemaining.startsWith('OFF')) {
+              isOff = true;
+              advancedRemaining = advancedRemaining.substring(3);
+            } else if (advancedRemaining.startsWith('O')) {
+              isOff = true;
+              advancedRemaining = advancedRemaining.substring(1);
+            }
+          }
+          
+          parsedTokens.push({
+            ...token,
+            number: num,
+            isOff: isOff
+          });
+          
+          text = advancedRemaining;
+          matched = true;
+          break;
+        }
+      }
+      
+      if (!matched) {
+        console.warn("Unknown automation token at: ", text);
+        text = text.substring(1);
+      }
+    }
+    
+    commands.push(parsedTokens);
+  }
+  return commands;
+}
+
+async function executeTake(item, parsedTokensArray, rowElement) {
+  let autoIncrementVideoIndex = 0;
+  
+  for (const tokens of parsedTokensArray) {
+    await executeAutomationTokens(item, tokens, () => {
+      let current = autoIncrementVideoIndex;
+      autoIncrementVideoIndex++;
+      return current;
+    }, rowElement);
+  }
+}
+
+async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowElement) {
+  let transitionToken = tokens.find(t => t.type === 'Transition');
+  let transitionFunc = transitionToken ? transitionToken.function : 'Cut';
+  
+  const micTokens = tokens.filter(t => t.type === 'Mic');
+  const hasMoff = tokens.some(t => t.type === 'Macro' && (t.function === 'MOFF' || t.function === 'SOT'));
+  
+  if (hasMoff || micTokens.length > 0) {
+     const allMics = automationMappings.filter(m => m.type === 'Mic');
+     for (const m of allMics) {
+       await window.api.vmixRequest(`Function=AudioOff&Input=${encodeURIComponent(m.target)}`);
+     }
+     
+     for (const mt of micTokens) {
+        let target = mt.target;
+        if (mt.number !== null) {
+          target = mt.number !== null ? `${mt.target}${mt.target.endsWith(' ') ? '' : ' '}${mt.number}` : mt.target;
+        }
+        await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(target)}`);
+     }
+  }
+
+  let currentDestination = null;
+  let currentDestFunc = null;
+  for (const token of tokens) {
+    if (token.type === 'Destination') {
+      currentDestination = token.number || 1;
+      currentDestFunc = token.function;
+      continue;
+    }
+    
+    let mixParam = currentDestination ? `&Mix=${currentDestination}` : '';
+
+    if (token.type === 'Macro') {
+      if (token.function === 'SOT' || token.function === 'VO') {
+        let fileIndex = 0;
+        if (token.number !== null && token.number > 0) {
+          fileIndex = token.number - 1;
+        } else {
+          fileIndex = getNextVideoIndex();
+        }
+        
+        let targetFileObj = item.files && item.files[fileIndex];
+        if (!targetFileObj) {
+            console.warn("executeTake: SOT/VO index out of bounds", fileIndex);
+            continue;
+        }
+        
+        let finalSlot = null;
+        if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
+          const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+          const slotToUse = await getSafeSlot(baseSlotToUse);
+          inCurrentIndex.value = slotToUse + 1;
+          
+          const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
+          await sendToVmix(dummyItemForVmix, slotToUse);
+          finalSlot = slotToUse;
+        } else {
+          finalSlot = targetFileObj.loadedSlot;
+        }
+        
+        // Transition it to program
+        const prefix = inPrefix.value || 'Video';
+        const inputName = `${prefix} ${finalSlot}`;
+        const funcToUse = currentDestination && currentDestFunc ? currentDestFunc : transitionFunc;
+        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}`);
+        
+        if (token.function === 'SOT') {
+          await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(inputName)}`);
+        }
+        
+        currentDestination = null;
+      } else if (token.function === 'CGOFF') {
+        const cgs = automationMappings.filter(m => m.type === 'Overlay');
+        for (const c of cgs) {
+          await window.api.vmixRequest(`Function=OverlayInput1Out&Input=${encodeURIComponent(c.target)}`);
+        }
+      }
+    } else if (token.type === 'Input') {
+      let target = token.target;
+      if (token.number !== null) {
+        target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
+      }
+      const funcToUse = currentDestination && currentDestFunc ? currentDestFunc : transitionFunc;
+      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}`);
+      currentDestination = null;
+    } else if (token.type === 'Overlay') {
+      let target = token.target;
+      if (token.number !== null) {
+         target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
+      }
+      let func = token.function;
+      
+      if (currentDestination) {
+         func = currentDestFunc || transitionFunc;
+         await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${mixParam}`);
+         currentDestination = null;
+      } else {
+         if (token.isOff) {
+            if (func.endsWith('In')) func = func.substring(0, func.length - 2) + 'Out';
+            else if (func.endsWith('On')) func = func.substring(0, func.length - 2) + 'Off';
+            else if (func.match(/OverlayInput\d$/)) func = func + 'Out'; 
+            else func = func + "Out";
+         }
+         await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}`);
+      }
+    }
+  }
+
+  if (currentDestination) {
+    // Implicit target is the row's first file
+    let targetFileObj = item.files && item.files[0];
+    if (targetFileObj) {
+        let finalSlot = null;
+        if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
+          const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+          const slotToUse = await getSafeSlot(baseSlotToUse);
+          inCurrentIndex.value = slotToUse + 1;
+          
+          const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: 0 };
+          await sendToVmix(dummyItemForVmix, slotToUse);
+          finalSlot = slotToUse;
+        } else {
+          finalSlot = targetFileObj.loadedSlot;
+        }
+        
+        const prefix = inPrefix.value || 'Video';
+        const inputName = `${prefix} ${finalSlot}`;
+        const mixParam = `&Mix=${currentDestination}`;
+        const funcToUse = currentDestFunc || transitionFunc;
+        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}`);
+    }
+  }
+}
+
+
+
+async function getSafeSlot(desiredSlot) {
+  if (!inProtectProgram.checked) return desiredSlot;
+  const activeTitles = await getVmixActiveSlotTitles();
+  let slot = desiredSlot;
+  const prefix = inPrefix.value || 'Video';
+  while (activeTitles.includes(`${prefix} ${slot}`)) {
+    slot++;
+  }
+  return slot;
+}
+
+
+
+let readAheadInterval = null;
+
+function startReadAheadQueue() {
+  if (readAheadInterval) clearInterval(readAheadInterval);
+  const tick = async () => {
+    if (!globalParsedItems || globalParsedItems.length === 0) return;
+    
+    // Find the currently on-air row index
+    const allRows = Array.from(document.querySelectorAll('.row-item'));
+    let currentIndex = allRows.findIndex(r => r.classList.contains('on-air'));
+    
+    if (currentIndex === -1) {
+       currentIndex = 0;
+    }
+    
+    // Check up to 3 rows ahead
+    const maxLookAhead = 3;
+    let lookAheadCount = 0;
+    
+    for (let i = currentIndex; i < globalParsedItems.length && lookAheadCount < maxLookAhead; i++) {
+       const item = globalParsedItems[i];
+       if (item && item.files && item.files.length > 0) {
+          let hasValidVideo = false;
+          
+          for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
+             const f = item.files[fIdx];
+             
+             // If the file is missing or has no path, we can't load it, so skip it completely
+             if (!f.resolvedPath) continue;
+             
+             hasValidVideo = true;
+
+             if (!f.isLoaded && !f.isLoading) {
+                f.isLoading = true;
+                
+                const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+                const slotToUse = await getSafeSlot(baseSlotToUse);
+                inCurrentIndex.value = slotToUse + 1;
+                
+                const dummyItemForVmix = { ...item, ...f, _sourceFileObj: f, _sourceRowId: `row-item-${i+1}`, _sourceFileIndex: fIdx, _automationCode: item.automationCode };
+                
+                const entry = allRows[i] ? allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`) : null;
+                const btn = entry ? (entry.querySelector('.btn-run-file') || entry.querySelector('.btn-run')) : null;
+                if (btn) btn.innerText = "Loading...";
+                
+                enqueueVmixAction(async () => {
+                   try {
+                      await sendToVmix(dummyItemForVmix, slotToUse);
+                      f.isLoaded = true;
+                      f.loadedSlot = slotToUse;
+                      if (btn) {
+                         btn.innerText = `Loaded [${slotToUse}]`;
+                         btn.classList.replace('primary', 'success');
+                      }
+                      
+                      const serverRowId = allRows[i] ? allRows[i].dataset.rowId : null;
+                      if (serverRowId) {
+                         syncRowFilesToServer({ rowId: serverRowId });
+                      }
+                   } catch(e) {
+                      console.error("Auto Load error:", e);
+                      if (btn) {
+                         btn.innerText = "ERROR";
+                         btn.classList.replace('primary', 'danger');
+                      }
+                   } finally {
+                      f.isLoading = false;
+                   }
+                });
+             }
+          }
+          if (hasValidVideo) {
+            lookAheadCount++;
+          }
+       }
+    }
+  };
+}
+startReadAheadQueue();
+

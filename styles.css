@@ -359,6 +359,7 @@ h3 {
 
 .row-title {
   flex: 3;
+  min-width: 0;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;

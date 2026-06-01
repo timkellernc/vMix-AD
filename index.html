@@ -87,8 +87,9 @@
       style="display: flex; align-items: center; padding: 0 4px 6px 12px; color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--panel-border); margin-bottom: 8px;">
       <div style="width: 40px;">Idx</div>
       <div style="width: 50px;">Page</div>
-      <div style="flex: 3;">Slug / Segment</div>
-      <div style="flex: 4;">
+      <div style="flex: 3; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Slug / Segment</div>
+      <div style="width: 140px; text-align: center;">Automation</div>
+      <div style="flex: 4; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
         <div style="padding: 4px 8px; margin: 2px 0; border: 1px solid transparent;">Media Files</div>
       </div>
       <div style="display: flex; gap: 8px; margin-left: 8px;">
@@ -187,6 +188,15 @@
         </div>
 
         <div class="settings-group">
+          <h3>Switcher Automation</h3>
+          <label>
+            Automation Column Name (Rundown Creator):
+            <input type="text" id="setting-automation-column" value="Switcher">
+          </label>
+          <button id="btn-open-mappings" class="btn secondary mt-2" style="width: 100%;">Configure Automation Mappings...</button>
+        </div>
+
+        <div class="settings-group">
           <h3>Display Settings</h3>
           <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
             <input type="checkbox" id="setting-use-24hr">
@@ -253,6 +263,41 @@
           <button id="btn-confirm-cancel" class="btn secondary">Cancel</button>
           <button id="btn-confirm-ok" class="btn danger">Discard Changes</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-automation-mappings" class="modal hidden" style="z-index: 1500;">
+    <div class="modal-content" style="width: 700px; max-height: 80vh;">
+      <div class="modal-header">
+        <h2>Automation Mappings</h2>
+        <button id="btn-close-mappings" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 16px; overflow-y: auto;">
+        <p style="margin-bottom: 16px; color: var(--text-secondary); font-size: 0.9rem;">
+          Map custom prefixes (e.g., C, M, CG, D) to vMix Inputs and Functions. The parser will read codes like `C1M1CG1` and execute the corresponding vMix commands.
+        </p>
+        
+        <table style="width: 100%; text-align: left; border-collapse: collapse; margin-bottom: 12px;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--panel-border);">
+              <th style="padding: 8px;">Prefix</th>
+              <th style="padding: 8px;">Type</th>
+              <th style="padding: 8px;">vMix Function</th>
+              <th style="padding: 8px;">Target Name/Input</th>
+              <th style="padding: 8px; width: 40px;"></th>
+            </tr>
+          </thead>
+          <tbody id="mappings-tbody">
+            <!-- Dynamic rows inserted here -->
+          </tbody>
+        </table>
+        
+        <button id="btn-add-mapping" class="btn secondary small">+ Add New Mapping</button>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px;">
+        <button id="btn-cancel-mappings" class="btn secondary">Cancel</button>
+        <button id="btn-save-mappings" class="btn primary">Save Mappings</button>
       </div>
     </div>
   </div>

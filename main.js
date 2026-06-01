@@ -10,7 +10,9 @@ const store = new Store({
     rundownCreatorAPIToken: '',
     vmixIP: '127.0.0.1:8088',
     showDirectory: '',
-    defaultsDirectory: ''
+    defaultsDirectory: '',
+    automationColumnName: 'Switcher',
+    automationMappings: []
   }
 });
 
