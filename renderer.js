@@ -71,6 +71,9 @@ const inPoolSize = document.getElementById('setting-poolsize');
 const inProtectProgram = document.getElementById('setting-protect-program');
 const inUse24Hr = document.getElementById('setting-use-24hr');
 const inAutomationColumn = document.getElementById('setting-automation-column');
+const inFadeDuration = document.getElementById('setting-fade-duration');
+
+let hasTriggeredAutomation = false;
 
 const btnOpenMappings = document.getElementById('btn-open-mappings');
 const modalAutomationMappings = document.getElementById('modal-automation-mappings');
@@ -92,6 +95,10 @@ let timerPollTimeout = null;
 let currentAutomationColumnName = 'Switcher';
 let activeOnAirRowId = null;
 let activeOnAirStartDate = null;
+let activeOnAirCmdIndex = -1;
+let lastPreviewCursorRow = -1;
+let lastPreviewCursorCmd = -1;
+let previewTimeout = null;
 let activeRundownStartTime = null;
 let activeRundownEndTime = null;
 let serverTimeOffsetMs = 0;
@@ -137,8 +144,9 @@ async function init(isStartup = false) {
   currentAutomationColumnName = settings.automationColumnName || 'Switcher';
   inAutomationColumn.value = currentAutomationColumnName;
   automationMappings = settings.automationMappings || [];
+  inFadeDuration.value = settings.fadeDuration || 500;
   inUse24Hr.checked = settings.use24Hr === true; // Default to false (12hr)
-  
+
   if (activeRundownId) {
     btnRefreshRundown.click();
   }
@@ -237,6 +245,7 @@ btnSaveScript.addEventListener('click', async () => {
       // Update local memory so we don't need to re-fetch
       activeScriptItem.script = newText;
       modalScript.classList.remove('visible');
+      refreshSignatureQuietly();
     } else {
       showToast("Error saving script: " + (res.error || "Unknown API error"));
     }
@@ -291,7 +300,8 @@ btnSaveSettings.addEventListener('click', async () => {
     use24Hr: inUse24Hr.checked,
     audioBuses: selectedBuses,
     automationColumnName: inAutomationColumn.value,
-    automationMappings: automationMappings
+    automationMappings: automationMappings,
+    fadeDuration: parseInt(inFadeDuration.value) || 500
   };
   await window.api.saveSettings(settings);
 
@@ -333,7 +343,7 @@ btnSaveMappings.addEventListener('click', async () => {
       target: row.querySelector('.map-target').value.trim()
     });
   });
-  
+
   automationMappings = newMappings;
   modalAutomationMappings.classList.remove('visible');
 });
@@ -362,11 +372,11 @@ function addMappingRow(mapping) {
     <td><input type="text" class="map-prefix" value="${mapping.prefix}" placeholder="e.g. C" style="width: 60px;"></td>
     <td>
       <select class="map-type">
-        <option value="Input" ${mapping.type==='Input'?'selected':''}>Input (Camera/Video)</option>
-        <option value="Mic" ${mapping.type==='Mic'?'selected':''}>Microphone</option>
-        <option value="Overlay" ${mapping.type==='Overlay'?'selected':''}>Overlay (CG)</option>
-        <option value="Transition" ${mapping.type==='Transition'?'selected':''}>Transition</option>
-        <option value="Destination" ${mapping.type==='Destination'?'selected':''}>Destination (Monitor/Mix)</option>
+        <option value="Input" ${mapping.type === 'Input' ? 'selected' : ''}>Input (Camera/Video)</option>
+        <option value="Mic" ${mapping.type === 'Mic' ? 'selected' : ''}>Microphone</option>
+        <option value="Overlay" ${mapping.type === 'Overlay' ? 'selected' : ''}>Overlay (CG)</option>
+        <option value="Transition" ${mapping.type === 'Transition' ? 'selected' : ''}>Transition</option>
+        <option value="Destination" ${mapping.type === 'Destination' ? 'selected' : ''}>Destination (Monitor/Mix)</option>
       </select>
     </td>
     <td><input type="text" class="map-func" value="${mapping.function}" placeholder="e.g. Cut" style="width: 120px;"></td>
@@ -453,11 +463,11 @@ async function getVmixActiveSlotTitles() {
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(res.data, "text/xml");
-    
+
     // Find ALL <active> nodes (Program + any Mixes)
     const activeNodes = doc.querySelectorAll('active');
     const titles = [];
-    
+
     activeNodes.forEach(node => {
       const activeNumber = node.textContent;
       const inputNode = doc.querySelector(`input[number="${activeNumber}"]`);
@@ -465,7 +475,7 @@ async function getVmixActiveSlotTitles() {
         titles.push(inputNode.getAttribute('title'));
       }
     });
-    
+
     return titles;
   } catch (err) {
     console.error("Failed to parse vMix active slots:", err);
@@ -689,6 +699,7 @@ async function syncRowFilesToServer(item) {
     });
 
     if (!setRes.success) throw new Error(setRes.error);
+    refreshSignatureQuietly();
   } catch (err) {
     showToast("Error appending element to server: " + err.message);
   }
@@ -704,7 +715,7 @@ function appendRowItem(item, insertBeforeNode = null) {
   row.className = 'row-item';
   row.id = `row-item-${itemCount}`;
   if (item.rowId) row.dataset.rowId = item.rowId;
-  
+
   let newFilesSig = item.automationCode || '';
   if (item.files) {
     newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
@@ -753,6 +764,7 @@ function appendRowItem(item, insertBeforeNode = null) {
               estInput.value = formatDuration(item.estDuration); // revert
               return;
             }
+            refreshSignatureQuietly();
           } catch (err) {
             showToast("Network Error updating duration: " + err.message);
             estInput.value = formatDuration(item.estDuration); // revert
@@ -907,7 +919,7 @@ function buildAutoHtml(item) {
   const autoCommands = item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0);
   let html = '';
   autoCommands.forEach(cmd => {
-    html += `<button class="btn primary small btn-run-auto" data-auto-cmd="${cmd}" style="margin: 2px;">${cmd}</button>`;
+    html += `<button class="btn small btn-run-auto" data-auto-cmd="${cmd}" style="margin: 2px;">${cmd}</button>`;
   });
   return html;
 }
@@ -927,7 +939,7 @@ function buildFilesHtml(item) {
       let fileClass = 'row-file';
       if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
 
-      let btnText = 'LOAD';
+      let btnText = 'Load';
       let btnClass = 'primary';
       if (file.isPlaceholderLoaded) {
         btnText = 'Searching...';
@@ -978,21 +990,84 @@ function buildFilesHtml(item) {
   return filesHtml;
 }
 
+function syncFileVisualState(item, fileIndex) {
+  const rowId = `row-item-${globalParsedItems.findIndex(i => i === item) + 1}`;
+  const row = document.getElementById(rowId);
+  if (!row) return;
+
+  const fileObj = item.files[fileIndex];
+  if (!fileObj) return;
+
+  const entry = row.querySelector(`.file-entry[data-file-index="${fileIndex}"]`);
+  if (!entry) return;
+
+  const btnRun = entry.querySelector('.btn-run-file');
+
+  // Sync File Entry classes
+  entry.classList.toggle('loaded', !!fileObj.isLoaded);
+  entry.classList.toggle('sent', !!fileObj.isLoaded);
+  entry.classList.toggle('placeholder-loaded', !!fileObj.isPlaceholderLoaded);
+
+  // Sync Button classes & text
+  if (btnRun) {
+    if (fileObj.isLoading) {
+      btnRun.innerText = "Loading...";
+      btnRun.classList.remove('success');
+      btnRun.classList.add('primary');
+    } else if (fileObj.isPlaceholderLoaded) {
+      btnRun.innerText = "Searching...";
+      btnRun.classList.remove('primary');
+      btnRun.classList.add('success');
+    } else if (fileObj.isLoaded) {
+      btnRun.innerText = fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded";
+      btnRun.classList.remove('primary');
+      btnRun.classList.add('success');
+    } else {
+      btnRun.innerText = "Load";
+      btnRun.classList.remove('success');
+      btnRun.classList.add('primary');
+      btnRun.style.borderColor = '';
+      btnRun.style.color = '';
+      btnRun.style.backgroundColor = '';
+    }
+  }
+
+  // Sync Row Level classes
+  const anyLoaded = item.files.some(f => f.isLoaded);
+  row.classList.toggle('loaded', anyLoaded);
+  row.classList.toggle('sent', anyLoaded);
+  item.isLoaded = anyLoaded;
+}
+
 function attachFilesEventListeners(item, row) {
   // Attach Automation Button Listeners
   const autoBtns = row.querySelectorAll('.btn-run-auto');
-  autoBtns.forEach(btn => {
+  autoBtns.forEach((btn, index) => {
     btn.addEventListener('click', () => {
       if (btn.innerText === "Sending...") return;
       const specificCmd = btn.dataset.autoCmd;
       if (!specificCmd) return;
-      
+
       btn.innerText = "Sending...";
       const parsedTokens = parseAutomationCode(specificCmd);
       executeTake(item, parsedTokens, row).then(() => {
         btn.innerText = specificCmd;
-        btn.classList.remove('primary', 'danger');
-        btn.classList.add('success');
+
+        // Make this row On-Air if not already, but do not wipe out our new cmd index!
+        if (String(activeOnAirRowId) !== String(item.rowId)) {
+          optimisticUpdateTimerUI(item.rowId, false); // false = don't reset activeOnAirCmdIndex!
+          window.api.rundownRequest('startTimingRow', {
+            RundownID: activeRundownId,
+            RowID: item.rowId
+          }).then(() => {
+            clearTimeout(timerPollTimeout);
+            pollOnAirTimer();
+          });
+        }
+
+        // Update state to mark this command and all before it as Past
+        activeOnAirCmdIndex = index;
+        syncAutomationUI();
       }).catch(err => {
         console.error("Automation error:", err);
         btn.innerText = "ERROR";
@@ -1103,20 +1178,12 @@ function attachFilesEventListeners(item, row) {
       }
     }
 
-    if (fileObj.isLoaded) {
-      entry.classList.add('loaded', 'sent');
-      if (fileObj.isPlaceholderLoaded) entry.classList.add('placeholder-loaded');
-      if (btnRun) {
-        btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : (fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded");
-        btnRun.classList.remove('primary');
-        btnRun.classList.add('success');
-      }
-    } else if (!fileObj.resolvedPath && btnRun) {
+    if (!fileObj.resolvedPath && btnRun) {
       // Allow button to remain active so it can load a placeholder and trigger auto-search
       btnRun.disabled = false;
       btnRun.style.opacity = '1';
-      btnRun.innerText = "Load";
     }
+    syncFileVisualState(item, fileIndex);
 
     if (btnRun) {
       btnRun.addEventListener('click', async () => {
@@ -1126,23 +1193,16 @@ function attachFilesEventListeners(item, row) {
           btnRun.innerText = "Sending...";
           const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
           const slotToUse = await getSafeSlot(baseSlotToUse);
-          inCurrentIndex.value = slotToUse + 1;
+          inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
 
           // Use fileObj instead of item for sendToVmix
           const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
           const result = await sendToVmix(dummyItemForVmix, slotToUse);
 
           if (result !== false) { // If it didn't explicitly fail
-            btnRun.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : `Loaded [${slotToUse}]`;
-            btnRun.classList.remove('primary');
-            btnRun.classList.add('success');
             fileObj.isLoaded = true;
             fileObj.isLoading = false;
-
-            if (item.files.every(f => f.isLoaded)) {
-              item.isLoaded = true;
-              row.classList.add('loaded', 'sent');
-            }
+            syncFileVisualState(item, fileIndex);
           } else {
             btnRun.innerText = "Load";
           }
@@ -1203,6 +1263,9 @@ function updateRowItem(item, row, newIndex) {
       if (autoContainer) autoContainer.innerHTML = buildAutoHtml(item);
       attachFilesEventListeners(item, row);
       row.dataset.filesSig = newFilesSig;
+
+      // Re-sync automation UI because we just destroyed and recreated the buttons
+      syncAutomationUI();
     }
   }
 }
@@ -1254,17 +1317,17 @@ function renderRows(items) {
     if (rowIdStr && existingRowsMap.has(rowIdStr)) {
       const existingRow = existingRowsMap.get(rowIdStr);
       existingRowsMap.delete(rowIdStr);
-      
+
       itemCount++;
       updateRowItem(item, existingRow, itemCount);
-      
+
       if (currentDOMNode !== existingRow) {
         rundownList.insertBefore(existingRow, currentDOMNode);
       } else {
         currentDOMNode = currentDOMNode.nextElementSibling;
       }
     } else {
-      appendRowItem(item, currentDOMNode); 
+      appendRowItem(item, currentDOMNode);
       // appendRowItem automatically increments itemCount, but doesn't advance currentDOMNode 
       // because it inserts *before* currentDOMNode, so currentDOMNode remains pointing to the next old element.
     }
@@ -1315,7 +1378,7 @@ async function processBatch(count, limitToSegment = false) {
       const btn = entry ? entry.querySelector('.btn-run') : null;
 
       const slotToUse = await getSafeSlot(baseSlotToUse);
-      inCurrentIndex.value = slotToUse + 1;
+      inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
 
       if (btn) btn.innerText = "Sending...";
 
@@ -1327,28 +1390,13 @@ async function processBatch(count, limitToSegment = false) {
       fileObj.isLoaded = dummyItemForVmix.isLoaded;
       fileObj.loadedSlot = dummyItemForVmix.loadedSlot;
       fileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
-
-      if (entry) {
-        entry.classList.add('sent', 'loaded');
-        if (fileObj.isPlaceholderLoaded) {
-          entry.classList.add('placeholder-loaded');
-        } else {
-          entry.classList.remove('placeholder-loaded');
-        }
-        if (btn) {
-          btn.innerText = fileObj.isPlaceholderLoaded ? "Searching..." : (fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded");
-          btn.classList.remove('primary');
-          btn.classList.add('success');
-          btn.style.borderColor = '';
-          btn.style.color = '';
-          btn.style.animation = '';
-        }
-      }
-      if (row) row.classList.add('sent', 'loaded'); // Mark parent row
+      syncFileVisualState(item, fIdx);
 
       let nextSlot = slotToUse + 1;
       if (nextSlot > poolSize) nextSlot = 1; // Wrap around
       inCurrentIndex.value = nextSlot;
+
+      if (row) row.classList.add('sent', 'loaded'); // Mark parent row
 
       itemsSent++;
     }
@@ -1457,8 +1505,8 @@ async function pollMissingMedia() {
       for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
         const fileObj = item.files[fIdx];
 
-        // Scan items that explicitly requested a file, but are currently missing OR using a Fallback
-        if (!fileObj.requestedFile || (fileObj.resolvedPath && !fileObj.isFallback)) continue;
+        // Scan items that explicitly requested a file, but are currently missing, using a Fallback, or need their placeholder replaced
+        if (!fileObj.requestedFile || (fileObj.resolvedPath && !fileObj.isFallback && !fileObj.isPlaceholderLoaded)) continue;
 
         const searchName = fileObj.requestedFile;
         const mediaInfo = await window.api.resolveMedia(searchName);
@@ -1534,13 +1582,9 @@ async function pollMissingMedia() {
                   await sendToVmix(dummyItemForVmix, fileObj.loadedSlot);
 
                   // Re-update visual state
-                  if (runBtn) {
-                    entry.classList.remove('placeholder-loaded');
-                    fileObj.isPlaceholderLoaded = false;
-                    runBtn.innerText = fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded";
-                    runBtn.classList.remove('primary');
-                    runBtn.classList.add('success');
-                  }
+                  fileObj.isPlaceholderLoaded = false;
+                  fileObj.isLoaded = true;
+                  syncFileVisualState(item, fIdx);
                 });
               }
             }
@@ -1625,7 +1669,7 @@ function startAutoRefreshPolling() {
   if (autoRefreshInterval) clearInterval(autoRefreshInterval);
   autoRefreshInterval = setInterval(async () => {
     if (!activeRundownId || btnRefreshRundown.disabled) return;
-    
+
     try {
       let res = await window.api.rundownRequest('getRows', { RundownID: activeRundownId });
       if (res.success) {
@@ -1636,10 +1680,21 @@ function startAutoRefreshPolling() {
           btnRefreshRundown.classList.remove('pulse-refresh');
         }
       }
-    } catch(e) {
+    } catch (e) {
       console.error("Auto-refresh poll failed", e);
     }
   }, 10000);
+}
+
+async function refreshSignatureQuietly() {
+  if (!activeRundownId) return;
+  try {
+    let res = await window.api.rundownRequest('getRows', { RundownID: activeRundownId });
+    if (res.success) {
+      window.lastRundownSignature = getApiRowsSignature(res.data);
+      btnRefreshRundown.classList.remove('pulse-refresh');
+    }
+  } catch (e) { }
 }
 
 async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '') {
@@ -1712,7 +1767,7 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
       const slugField = row.StorySlug || '';
       const scriptField = row.Script || row.Body || row.StoryBody || '';
       const rowIdField = row.RowID || row.ID || row.id || '';
-      
+
       const colNameLower = (currentAutomationColumnName || inAutomationColumn.value || 'Switcher').toLowerCase();
       const automationRowKey = Object.keys(row).find(k => k.toLowerCase() === colNameLower);
       const automationCode = automationRowKey ? row[automationRowKey] : '';
@@ -1816,6 +1871,17 @@ btnRefreshRundown.addEventListener('click', async () => {
 btnResetRundown.addEventListener('click', async () => {
   const settings = await window.api.getSettings();
   if (settings.lastRundownId) {
+    if (activeOnAirRowId) {
+      optimisticUpdateTimerUI(0);
+      try {
+        await window.api.rundownRequest('startTimingRow', {
+          RundownID: settings.lastRundownId,
+          RowID: 0
+        });
+      } catch (e) {
+        console.error("Failed to stop timer during reset", e);
+      }
+    }
     await loadApiRundown(settings.lastRundownId, false, settings.lastRundownTitle);
   } else {
     alert("No API rundown is currently loaded. Use 'Select Rundown' first.");
@@ -2061,39 +2127,16 @@ menuMarkPrevLoaded.addEventListener('click', () => {
       const gItem = globalParsedItems[i];
       if (gItem && gItem.files && gItem.files.length > 0) {
         if (i < targetIndex || activeContextMenuFileIndex === -1) {
-          allRows[i].classList.add('loaded', 'sent');
-          gItem.isLoaded = true;
-          gItem.files.forEach(f => f.isLoaded = true);
-
-          const entries = allRows[i].querySelectorAll('.file-entry');
-          entries.forEach(e => {
-            e.classList.add('loaded', 'sent');
-            const btn = e.querySelector('.btn-run');
-            if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-              btn.innerText = "Loaded";
-              btn.classList.remove('primary');
-              btn.classList.add('success');
-            }
+          gItem.files.forEach((f, fIdx) => {
+            f.isLoaded = true;
+            syncFileVisualState(gItem, fIdx);
           });
         } else {
           for (let fIdx = 0; fIdx <= activeContextMenuFileIndex; fIdx++) {
             if (gItem.files[fIdx]) {
               gItem.files[fIdx].isLoaded = true;
-              const entry = allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`);
-              if (entry) {
-                entry.classList.add('loaded', 'sent');
-                const btn = entry.querySelector('.btn-run');
-                if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-                  btn.innerText = "Loaded";
-                  btn.classList.remove('primary');
-                  btn.classList.add('success');
-                }
-              }
+              syncFileVisualState(gItem, fIdx);
             }
-          }
-          if (gItem.files.every(f => f.isLoaded)) {
-            gItem.isLoaded = true;
-            allRows[i].classList.add('loaded', 'sent');
           }
         }
       }
@@ -2108,41 +2151,20 @@ menuMarkLoaded.addEventListener('click', () => {
   const gItem = globalParsedItems[targetIndex];
   if (targetIndex > -1 && gItem && gItem.files && gItem.files.length > 0) {
     if (activeContextMenuFileIndex === -1) {
-      gItem.isLoaded = true;
-      gItem.files.forEach(f => f.isLoaded = true);
-
-      activeContextMenuRow.classList.add('loaded', 'sent');
-      const entries = activeContextMenuRow.querySelectorAll('.file-entry');
-      entries.forEach(e => {
-        e.classList.add('loaded', 'sent');
-        const btn = e.querySelector('.btn-run');
-        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-          btn.innerText = "Loaded";
-          btn.classList.remove('primary');
-          btn.classList.add('success');
-        }
+      gItem.files.forEach((f, fIdx) => {
+        f.isLoaded = true;
+        syncFileVisualState(gItem, fIdx);
       });
     } else {
       if (gItem.files && gItem.files[activeContextMenuFileIndex]) {
         gItem.files[activeContextMenuFileIndex].isLoaded = true;
-      }
-
-      const entry = activeContextMenuRow.querySelector(`.file-entry[data-file-index="${activeContextMenuFileIndex}"]`);
-      if (entry) {
-        entry.classList.add('loaded', 'sent');
-        const btn = entry.querySelector('.btn-run');
-        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-          btn.innerText = "Loaded";
-          btn.classList.remove('primary');
-          btn.classList.add('success');
-        }
-      }
-
-      if (gItem.files && gItem.files.every(f => f.isLoaded)) {
-        gItem.isLoaded = true;
-        activeContextMenuRow.classList.add('loaded', 'sent');
+        syncFileVisualState(gItem, activeContextMenuFileIndex);
       }
     }
+  }
+  if (gItem.files && gItem.files.every(f => f.isLoaded)) {
+    gItem.isLoaded = true;
+    activeContextMenuRow.classList.add('loaded', 'sent');
   }
 });
 
@@ -2153,44 +2175,18 @@ menuMarkUnloaded.addEventListener('click', () => {
   const gItem = globalParsedItems[targetIndex];
   if (targetIndex > -1 && gItem) {
     if (activeContextMenuFileIndex === -1) {
-      gItem.isLoaded = false;
-      gItem.isLoading = false;
-      if (gItem.files) gItem.files.forEach(f => {
+      if (gItem.files) gItem.files.forEach((f, fIdx) => {
         f.isLoaded = false;
         f.isLoading = false;
         f.isPlaceholderLoaded = false;
-      });
-
-      activeContextMenuRow.classList.remove('loaded', 'sent');
-      const entries = activeContextMenuRow.querySelectorAll('.file-entry');
-      entries.forEach(e => {
-        e.classList.remove('loaded', 'sent', 'placeholder-loaded');
-        const btn = e.querySelector('.btn-run');
-        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-          btn.innerText = "Load";
-          btn.classList.remove('success');
-          btn.classList.add('primary');
-        }
+        syncFileVisualState(gItem, fIdx);
       });
     } else {
       if (gItem.files && gItem.files[activeContextMenuFileIndex]) {
         gItem.files[activeContextMenuFileIndex].isLoaded = false;
         gItem.files[activeContextMenuFileIndex].isLoading = false;
         gItem.files[activeContextMenuFileIndex].isPlaceholderLoaded = false;
-      }
-
-      gItem.isLoaded = false;
-      activeContextMenuRow.classList.remove('loaded', 'sent');
-
-      const entry = activeContextMenuRow.querySelector(`.file-entry[data-file-index="${activeContextMenuFileIndex}"]`);
-      if (entry) {
-        entry.classList.remove('loaded', 'sent', 'placeholder-loaded');
-        const btn = entry.querySelector('.btn-run');
-        if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-          btn.innerText = "Load";
-          btn.classList.remove('success');
-          btn.classList.add('primary');
-        }
+        syncFileVisualState(gItem, activeContextMenuFileIndex);
       }
     }
   }
@@ -2210,41 +2206,15 @@ menuMarkFutureUnloaded.addEventListener('click', () => {
               gItem.files[fIdx].isLoaded = false;
               gItem.files[fIdx].isLoading = false;
               gItem.files[fIdx].isPlaceholderLoaded = false;
-              const entry = allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`);
-              if (entry) {
-                entry.classList.remove('loaded', 'sent', 'placeholder-loaded');
-                const btn = entry.querySelector('.btn-run');
-                if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-                  btn.innerText = "Load";
-                  btn.classList.remove('success');
-                  btn.classList.add('primary');
-                }
-              }
+              syncFileVisualState(gItem, fIdx);
             }
           }
-          if (gItem.files.every(f => !f.isLoaded)) {
-            gItem.isLoaded = false;
-            allRows[i].classList.remove('loaded', 'sent');
-          }
         } else {
-          gItem.isLoaded = false;
-          gItem.isLoading = false;
-          gItem.files.forEach(f => {
+          gItem.files.forEach((f, fIdx) => {
             f.isLoaded = false;
             f.isLoading = false;
             f.isPlaceholderLoaded = false;
-          });
-
-          allRows[i].classList.remove('loaded', 'sent');
-          const entries = allRows[i].querySelectorAll('.file-entry');
-          entries.forEach(e => {
-            e.classList.remove('loaded', 'sent', 'placeholder-loaded');
-            const btn = e.querySelector('.btn-run');
-            if (btn && !btn.disabled && btn.innerText !== "Missing" && btn.innerText !== "Sending...") {
-              btn.innerText = "Load";
-              btn.classList.remove('success');
-              btn.classList.add('primary');
-            }
+            syncFileVisualState(gItem, fIdx);
           });
         }
       }
@@ -2263,16 +2233,14 @@ menuMarkFloated.addEventListener('click', async () => {
 
   if (item.rowId) {
     try {
-      const res = await window.api.rundownRequest('setRowProperties', {
+      const setRes = await window.api.rundownRequest('setRowProperties', {
         RowID: item.rowId,
         Floated: newFloatedState ? "true" : "false"
       });
-      if (!res.success) {
-        showToast("Error toggling floated state on server: " + (res.error || "Unknown error"));
-        return;
-      }
+      if (!setRes.success) throw new Error(setRes.error);
+      refreshSignatureQuietly();
     } catch (err) {
-      showToast("Network Error toggling floated: " + err.message);
+      showToast("Error toggling floated state on server: " + (err.message || "Unknown error"));
       return;
     }
   }
@@ -2348,7 +2316,7 @@ function getBlockFirstItemIndex(currentIndex) {
   return firstIdx;
 }
 
-function optimisticUpdateTimerUI(rowId) {
+function optimisticUpdateTimerUI(rowId, resetCmdIndex = true) {
   timerIgnoreApiUpdatesUntil = Date.now() + 2000; // Ignore stale API data for 2 seconds
 
   const allRows = document.querySelectorAll('.row-item');
@@ -2357,12 +2325,15 @@ function optimisticUpdateTimerUI(rowId) {
   if (!rowId || String(rowId) === "0") {
     activeOnAirRowId = null;
     activeOnAirStartDate = null;
+    if (resetCmdIndex) activeOnAirCmdIndex = -1;
     updateLiveTimers();
+    syncAutomationUI();
     return;
   }
 
   activeOnAirRowId = rowId;
   activeOnAirStartDate = Math.floor((Date.now() + serverTimeOffsetMs) / 1000);
+  if (resetCmdIndex) activeOnAirCmdIndex = -1;
 
   const targetIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(rowId));
   if (targetIndex > -1) {
@@ -2373,6 +2344,7 @@ function optimisticUpdateTimerUI(rowId) {
     }
   }
   updateLiveTimers();
+  syncAutomationUI();
 }
 
 function formatDuration(seconds) {
@@ -2595,15 +2567,27 @@ async function pollOnAirTimer() {
               activeRundown.OnAirTimer_Date !== "";
             if (isActive) {
               nextDelay = 2000;
-              const serverStartDate = parseInt(activeRundown.OnAirTimer_Date, 10);
-              // Prevent 1-second UI jumping by ignoring minor server variance on the same active row
-              if (activeOnAirRowId === activeRundown.OnAirTimer_RowID &&
-                activeOnAirStartDate !== null &&
-                Math.abs(activeOnAirStartDate - serverStartDate) <= 2) {
-                // Keep the local activeOnAirStartDate to prevent jitter
+              if (activeRundown.OnAirTimer_RowID) {
+                const serverStartDate = parseInt(activeRundown.OnAirTimer_Date, 10);
+                if (activeOnAirRowId === activeRundown.OnAirTimer_RowID &&
+                  activeOnAirStartDate !== null &&
+                  Math.abs(activeOnAirStartDate - serverStartDate) <= 2) {
+                  // Keep the local activeOnAirStartDate to prevent jitter
+                } else {
+                  if (activeOnAirRowId !== activeRundown.OnAirTimer_RowID) {
+                    activeOnAirCmdIndex = -1; // Reset cmd index if it changed externally
+                  }
+                  activeOnAirRowId = activeRundown.OnAirTimer_RowID;
+                  activeOnAirStartDate = serverStartDate;
+                  syncAutomationUI();
+                }
               } else {
-                activeOnAirRowId = activeRundown.OnAirTimer_RowID;
-                activeOnAirStartDate = serverStartDate;
+                if (activeOnAirRowId !== null) {
+                  activeOnAirCmdIndex = -1;
+                }
+                activeOnAirRowId = null;
+                activeOnAirStartDate = null;
+                syncAutomationUI();
               }
             } else {
               activeOnAirRowId = null;
@@ -2675,7 +2659,7 @@ document.addEventListener('keydown', (e) => {
     if (e.shiftKey) {
       startTimerOnPrevRow();
     } else {
-      startTimerOnNextRow();
+      executeNextSpacebarAction();
     }
   }
 
@@ -2685,6 +2669,176 @@ document.addEventListener('keydown', (e) => {
     btnRefreshRundown.click();
   }
 });
+
+function getNextStepCursor() {
+  const getFirstCmdOfRow = (rIdx) => {
+    if (rIdx >= globalParsedItems.length) return null;
+    const item = globalParsedItems[rIdx];
+    const cmds = item.automationCode ? item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+    return { row: rIdx, cmd: cmds.length > 0 ? 0 : -1 };
+  };
+
+  if (!activeOnAirRowId) {
+    return getFirstCmdOfRow(0);
+  }
+
+  const currentIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(activeOnAirRowId));
+  if (currentIndex === -1) return getFirstCmdOfRow(0);
+
+  const currentItem = globalParsedItems[currentIndex];
+  const cmds = currentItem.automationCode ? currentItem.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+
+  if (activeOnAirCmdIndex + 1 < cmds.length) {
+    // Next step is executing the next command on this row
+    return { row: currentIndex, cmd: activeOnAirCmdIndex + 1 };
+  } else {
+    // Next step is advancing to the NEXT row
+    return getFirstCmdOfRow(currentIndex + 1);
+  }
+}
+
+function syncAutomationUI() {
+  const nextCursor = getNextStepCursor();
+
+  if (nextCursor) {
+    if (nextCursor.row !== lastPreviewCursorRow || nextCursor.cmd !== lastPreviewCursorCmd) {
+      lastPreviewCursorRow = nextCursor.row;
+      lastPreviewCursorCmd = nextCursor.cmd;
+      if (previewTimeout) clearTimeout(previewTimeout);
+      previewTimeout = setTimeout(() => {
+        previewNextCommand(nextCursor);
+      }, 1000); // Wait 1s for any active transitions to finish
+    }
+  } else {
+    lastPreviewCursorRow = -1;
+    lastPreviewCursorCmd = -1;
+  }
+
+  const onAirIndex = activeOnAirRowId ? globalParsedItems.findIndex(i => String(i.rowId) === String(activeOnAirRowId)) : -1;
+
+  const allRows = document.querySelectorAll('.row-item');
+  allRows.forEach((rowNode, rIdx) => {
+    const autoBtns = rowNode.querySelectorAll('.btn-run-auto');
+    autoBtns.forEach((btn, cIdx) => {
+      btn.classList.remove('success', 'preview', 'program');
+
+      if (rIdx < onAirIndex) {
+        btn.classList.add('success'); // Past row
+      }
+      else if (rIdx === onAirIndex) {
+        if (cIdx < activeOnAirCmdIndex) {
+          btn.classList.add('success'); // Past command
+        } else if (cIdx === activeOnAirCmdIndex) {
+          btn.classList.add('program'); // Active command
+        } else if (nextCursor && nextCursor.row === rIdx && nextCursor.cmd === cIdx) {
+          btn.classList.add('preview'); // Next command!
+        }
+      }
+      else {
+        // rIdx > onAirIndex
+        if (nextCursor && nextCursor.row === rIdx && nextCursor.cmd === cIdx) {
+          btn.classList.add('preview'); // Next command (can happen if onAirIndex is -1)
+        }
+      }
+    });
+  });
+}
+
+async function startTimerOnRowId(rowId) {
+  if (!activeRundownId) return;
+  try {
+    optimisticUpdateTimerUI(rowId, true); // true = reset cmd index
+    const res = await window.api.rundownRequest('startTimingRow', {
+      RundownID: activeRundownId,
+      RowID: rowId
+    });
+    if (res.success) {
+      clearTimeout(timerPollTimeout);
+      pollOnAirTimer();
+    } else {
+      showToast("Error starting timer: " + (res.error || "Unknown error"));
+    }
+  } catch (err) {
+    showToast("Network Error starting timer: " + err.message);
+  }
+}
+
+async function executeNextSpacebarAction() {
+  const nextCursor = getNextStepCursor();
+  if (!nextCursor) return; // end of rundown
+
+  const item = globalParsedItems[nextCursor.row];
+  if (nextCursor.cmd === -1) {
+    // Row has no commands to fire, just advance row!
+    startTimerOnRowId(item.rowId);
+  } else {
+    // We have a command to fire. 
+    // Ensure the row is On-Air FIRST
+    if (String(activeOnAirRowId) !== String(item.rowId)) {
+      await startTimerOnRowId(item.rowId);
+    }
+
+    // Execute command!
+    const cmds = item.automationCode ? item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+    const cmdToTake = cmds[nextCursor.cmd];
+    const rowEl = document.getElementById(`row-item-${nextCursor.row + 1}`);
+
+    executeTake(item, parseAutomationCode(cmdToTake), rowEl);
+
+    activeOnAirCmdIndex = nextCursor.cmd;
+    syncAutomationUI();
+  }
+}
+
+function previewNextCommand(cursor) {
+  if (!cursor) return;
+  const rowItem = globalParsedItems[cursor.row];
+  if (!rowItem || !rowItem.automationCode) return;
+
+  const cmds = rowItem.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0);
+  const cmdStr = cmds[cursor.cmd];
+  if (!cmdStr) return;
+
+  const parsedArrays = parseAutomationCode(cmdStr);
+  const tokens = parsedArrays.length > 0 ? parsedArrays[0] : [];
+
+  // Find destination if any
+  const destToken = tokens.find(t => t.type === 'Destination');
+  const mixParam = destToken ? `&Mix=${destToken.target}` : '';
+
+  const inputToken = tokens.find(t => t.type === 'Input');
+
+  if (inputToken) {
+    let target = inputToken.target;
+    if (inputToken.number !== null) {
+      target = inputToken.number !== null ? `${inputToken.target}${inputToken.target.endsWith(' ') ? '' : ' '}${inputToken.number}` : inputToken.target;
+    }
+    window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(target)}${mixParam}`);
+    return;
+  }
+
+  // Implicit target (SOT/VO/Dest)
+  const hasSot = tokens.some(t => t.type === 'Macro' && t.function === 'SOT');
+  const hasVo = tokens.some(t => t.type === 'Macro' && t.function === 'VO');
+  const hasDest = tokens.some(t => t.type === 'Destination');
+
+  if (hasSot || hasVo || hasDest) {
+    const prefix = inPrefix.value || 'Video';
+    console.log('previewNextCommand implicit target check. hasSot:', hasSot, 'hasVo:', hasVo, 'hasDest:', hasDest, 'files:', rowItem.files);
+    if (rowItem.files && rowItem.files.length > 0) {
+      const targetFileObj = rowItem.files[0];
+      if (targetFileObj && targetFileObj.loadedSlot) {
+        const inputName = `${prefix} ${targetFileObj.loadedSlot}`;
+        console.log('previewing implicit video:', inputName, 'mix:', mixParam);
+        window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(inputName)}${mixParam}`);
+      } else {
+        console.log('No targetFileObj with loadedSlot found. targetFileObj:', targetFileObj);
+      }
+    } else {
+      console.log('No files found for this row');
+    }
+  }
+}
 
 async function startTimerOnNextRow() {
   if (!activeRundownId || globalParsedItems.length === 0) return;
@@ -2774,15 +2928,15 @@ async function startTimerOnPrevRow() {
 function parseAutomationCode(codeString) {
   if (!codeString) return [];
   const commands = [];
-  
+
   const segments = codeString.split(';');
-  
+
   for (let segment of segments) {
     let text = segment.replace(/\s+/g, '').toUpperCase();
     if (!text) continue;
-    
+
     const sortedMappings = [...automationMappings].sort((a, b) => b.prefix.length - a.prefix.length);
-    
+
     const macros = [
       { prefix: 'SOT', type: 'Macro', function: 'SOT', target: '' },
       { prefix: 'VO', type: 'Macro', function: 'VO', target: '' },
@@ -2791,9 +2945,9 @@ function parseAutomationCode(codeString) {
       { prefix: 'MO', type: 'Macro', function: 'MOFF', target: '' },
       { prefix: 'CGOFF', type: 'Macro', function: 'CGOFF', target: '' }
     ].sort((a, b) => b.prefix.length - a.prefix.length);
-    
+
     const allTokens = [...macros, ...sortedMappings].sort((a, b) => b.prefix.length - a.prefix.length);
-    
+
     let parsedTokens = [];
     while (text.length > 0) {
       let matched = false;
@@ -2802,10 +2956,10 @@ function parseAutomationCode(codeString) {
           const remaining = text.substring(token.prefix.length);
           const numMatch = remaining.match(/^(\d+)/);
           const num = numMatch ? parseInt(numMatch[1], 10) : null;
-          
+
           let advancedRemaining = remaining.substring(num ? String(num).length : 0);
           let isOff = false;
-          
+
           if (token.type === 'Overlay') {
             if (advancedRemaining.startsWith('OFF')) {
               isOff = true;
@@ -2815,25 +2969,25 @@ function parseAutomationCode(codeString) {
               advancedRemaining = advancedRemaining.substring(1);
             }
           }
-          
+
           parsedTokens.push({
             ...token,
             number: num,
             isOff: isOff
           });
-          
+
           text = advancedRemaining;
           matched = true;
           break;
         }
       }
-      
+
       if (!matched) {
         console.warn("Unknown automation token at: ", text);
         text = text.substring(1);
       }
     }
-    
+
     commands.push(parsedTokens);
   }
   return commands;
@@ -2841,7 +2995,7 @@ function parseAutomationCode(codeString) {
 
 async function executeTake(item, parsedTokensArray, rowElement) {
   let autoIncrementVideoIndex = 0;
-  
+
   for (const tokens of parsedTokensArray) {
     await executeAutomationTokens(item, tokens, () => {
       let current = autoIncrementVideoIndex;
@@ -2852,25 +3006,29 @@ async function executeTake(item, parsedTokensArray, rowElement) {
 }
 
 async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowElement) {
+  hasTriggeredAutomation = true;
   let transitionToken = tokens.find(t => t.type === 'Transition');
-  let transitionFunc = transitionToken ? transitionToken.function : 'Cut';
-  
+  let explicitTransitionFunc = transitionToken ? transitionToken.function : null;
+  let defaultDuration = inFadeDuration ? inFadeDuration.value : '500';
+  let explicitTransitionDuration = transitionToken ? `&Duration=${transitionToken.number !== null ? transitionToken.number : defaultDuration}` : '';
+  let defaultTransitionFunc = 'Cut';
+
   const micTokens = tokens.filter(t => t.type === 'Mic');
   const hasMoff = tokens.some(t => t.type === 'Macro' && (t.function === 'MOFF' || t.function === 'SOT'));
-  
+
   if (hasMoff || micTokens.length > 0) {
-     const allMics = automationMappings.filter(m => m.type === 'Mic');
-     for (const m of allMics) {
-       await window.api.vmixRequest(`Function=AudioOff&Input=${encodeURIComponent(m.target)}`);
-     }
-     
-     for (const mt of micTokens) {
-        let target = mt.target;
-        if (mt.number !== null) {
-          target = mt.number !== null ? `${mt.target}${mt.target.endsWith(' ') ? '' : ' '}${mt.number}` : mt.target;
-        }
-        await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(target)}`);
-     }
+    const allMics = automationMappings.filter(m => m.type === 'Mic');
+    for (const m of allMics) {
+      await window.api.vmixRequest(`Function=AudioOff&Input=${encodeURIComponent(m.target)}`);
+    }
+
+    for (const mt of micTokens) {
+      let target = mt.target;
+      if (mt.number !== null) {
+        target = mt.number !== null ? `${mt.target}${mt.target.endsWith(' ') ? '' : ' '}${mt.number}` : mt.target;
+      }
+      await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(target)}`);
+    }
   }
 
   let currentDestination = null;
@@ -2881,7 +3039,7 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
       currentDestFunc = token.function;
       continue;
     }
-    
+
     let mixParam = currentDestination ? `&Mix=${currentDestination}` : '';
 
     if (token.type === 'Macro') {
@@ -2892,36 +3050,62 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
         } else {
           fileIndex = getNextVideoIndex();
         }
-        
+
         let targetFileObj = item.files && item.files[fileIndex];
         if (!targetFileObj) {
-            console.warn("executeTake: SOT/VO index out of bounds", fileIndex);
-            continue;
+          console.warn("executeTake: SOT/VO index out of bounds", fileIndex);
+          continue;
         }
-        
+
         let finalSlot = null;
         if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
           const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
           const slotToUse = await getSafeSlot(baseSlotToUse);
-          inCurrentIndex.value = slotToUse + 1;
-          
+          inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
+
           const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
           await sendToVmix(dummyItemForVmix, slotToUse);
           finalSlot = slotToUse;
+
+          const fileEntry = rowElement.querySelector(`.file-entry[data-file-index="${fileIndex}"]`);
+          if (fileEntry) {
+            const btnRun = fileEntry.querySelector('.btn-run-file');
+            if (btnRun) {
+              btnRun.classList.remove('primary');
+              btnRun.classList.add('success');
+              btnRun.innerText = targetFileObj.isPlaceholderLoaded ? "Searching..." : `Loaded [${slotToUse}]`;
+            }
+            fileEntry.classList.add('loaded', 'sent');
+            if (targetFileObj.isPlaceholderLoaded) {
+              fileEntry.classList.add('placeholder-loaded');
+            }
+          }
+          if (item.files && item.files.every(f => f.isLoaded)) {
+            item.isLoaded = true;
+            rowElement.classList.add('loaded', 'sent');
+          }
+
+          // Force complete re-render to guarantee UI is correct locally
+          const rowIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(item.rowId));
+          if (rowIndex > -1) {
+            updateRowItem(item, rowElement, rowIndex + 1);
+            syncAutomationUI();
+          }
         } else {
           finalSlot = targetFileObj.loadedSlot;
         }
-        
+
         // Transition it to program
         const prefix = inPrefix.value || 'Video';
         const inputName = `${prefix} ${finalSlot}`;
-        const funcToUse = currentDestination && currentDestFunc ? currentDestFunc : transitionFunc;
-        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}`);
-        
+        const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : defaultTransitionFunc);
+        const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : '';
+        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+
         if (token.function === 'SOT') {
           await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(inputName)}`);
         }
-        
+
         currentDestination = null;
       } else if (token.function === 'CGOFF') {
         const cgs = automationMappings.filter(m => m.type === 'Overlay');
@@ -2934,28 +3118,30 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
       if (token.number !== null) {
         target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
       }
-      const funcToUse = currentDestination && currentDestFunc ? currentDestFunc : transitionFunc;
-      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}`);
+      const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : defaultTransitionFunc);
+      const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : '';
+      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}${durParam}`);
       currentDestination = null;
     } else if (token.type === 'Overlay') {
       let target = token.target;
       if (token.number !== null) {
-         target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
+        target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
       }
       let func = token.function;
-      
+
       if (currentDestination) {
-         func = currentDestFunc || transitionFunc;
-         await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${mixParam}`);
-         currentDestination = null;
+        func = explicitTransitionFunc || currentDestFunc || defaultTransitionFunc;
+        const durParam = (func === explicitTransitionFunc) ? explicitTransitionDuration : '';
+        await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${mixParam}${durParam}`);
+        currentDestination = null;
       } else {
-         if (token.isOff) {
-            if (func.endsWith('In')) func = func.substring(0, func.length - 2) + 'Out';
-            else if (func.endsWith('On')) func = func.substring(0, func.length - 2) + 'Off';
-            else if (func.match(/OverlayInput\d$/)) func = func + 'Out'; 
-            else func = func + "Out";
-         }
-         await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}`);
+        if (token.isOff) {
+          if (func.endsWith('In')) func = func.substring(0, func.length - 2) + 'Out';
+          else if (func.endsWith('On')) func = func.substring(0, func.length - 2) + 'Off';
+          else if (func.match(/OverlayInput\d$/)) func = func + 'Out';
+          else func = func + "Out";
+        }
+        await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}`);
       }
     }
   }
@@ -2964,24 +3150,25 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
     // Implicit target is the row's first file
     let targetFileObj = item.files && item.files[0];
     if (targetFileObj) {
-        let finalSlot = null;
-        if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
-          const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
-          const slotToUse = await getSafeSlot(baseSlotToUse);
-          inCurrentIndex.value = slotToUse + 1;
-          
-          const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: 0 };
-          await sendToVmix(dummyItemForVmix, slotToUse);
-          finalSlot = slotToUse;
-        } else {
-          finalSlot = targetFileObj.loadedSlot;
-        }
-        
-        const prefix = inPrefix.value || 'Video';
-        const inputName = `${prefix} ${finalSlot}`;
-        const mixParam = `&Mix=${currentDestination}`;
-        const funcToUse = currentDestFunc || transitionFunc;
-        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}`);
+      let finalSlot = null;
+      if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
+        const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+        const slotToUse = await getSafeSlot(baseSlotToUse);
+        inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
+
+        const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: 0 };
+        await sendToVmix(dummyItemForVmix, slotToUse);
+        finalSlot = slotToUse;
+      } else {
+        finalSlot = targetFileObj.loadedSlot;
+      }
+
+      const prefix = inPrefix.value || 'Video';
+      const inputName = `${prefix} ${finalSlot}`;
+      const mixParam = `&Mix=${currentDestination}`;
+      const funcToUse = explicitTransitionFunc || currentDestFunc || defaultTransitionFunc;
+      const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : '';
+      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
     }
   }
 }
@@ -3007,77 +3194,82 @@ function startReadAheadQueue() {
   if (readAheadInterval) clearInterval(readAheadInterval);
   const tick = async () => {
     if (!globalParsedItems || globalParsedItems.length === 0) return;
-    
+
     // Find the currently on-air row index
     const allRows = Array.from(document.querySelectorAll('.row-item'));
     let currentIndex = allRows.findIndex(r => r.classList.contains('on-air'));
-    
+
     if (currentIndex === -1) {
-       currentIndex = 0;
+      hasTriggeredAutomation = false;
+      return;
     }
-    
+
+    if (!hasTriggeredAutomation) {
+      return;
+    }
+
     // Check up to 3 rows ahead
     const maxLookAhead = 3;
     let lookAheadCount = 0;
-    
-    for (let i = currentIndex; i < globalParsedItems.length && lookAheadCount < maxLookAhead; i++) {
-       const item = globalParsedItems[i];
-       if (item && item.files && item.files.length > 0) {
-          let hasValidVideo = false;
-          
-          for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
-             const f = item.files[fIdx];
-             
-             // If the file is missing or has no path, we can't load it, so skip it completely
-             if (!f.resolvedPath) continue;
-             
-             hasValidVideo = true;
 
-             if (!f.isLoaded && !f.isLoading) {
-                f.isLoading = true;
-                
-                const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
-                const slotToUse = await getSafeSlot(baseSlotToUse);
-                inCurrentIndex.value = slotToUse + 1;
-                
-                const dummyItemForVmix = { ...item, ...f, _sourceFileObj: f, _sourceRowId: `row-item-${i+1}`, _sourceFileIndex: fIdx, _automationCode: item.automationCode };
-                
-                const entry = allRows[i] ? allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`) : null;
-                const btn = entry ? (entry.querySelector('.btn-run-file') || entry.querySelector('.btn-run')) : null;
-                if (btn) btn.innerText = "Loading...";
-                
-                enqueueVmixAction(async () => {
-                   try {
-                      await sendToVmix(dummyItemForVmix, slotToUse);
-                      f.isLoaded = true;
-                      f.loadedSlot = slotToUse;
-                      if (btn) {
-                         btn.innerText = `Loaded [${slotToUse}]`;
-                         btn.classList.replace('primary', 'success');
-                      }
-                      
-                      const serverRowId = allRows[i] ? allRows[i].dataset.rowId : null;
-                      if (serverRowId) {
-                         syncRowFilesToServer({ rowId: serverRowId });
-                      }
-                   } catch(e) {
-                      console.error("Auto Load error:", e);
-                      if (btn) {
-                         btn.innerText = "ERROR";
-                         btn.classList.replace('primary', 'danger');
-                      }
-                   } finally {
-                      f.isLoading = false;
-                   }
-                });
-             }
+    for (let i = currentIndex; i < globalParsedItems.length && lookAheadCount < maxLookAhead; i++) {
+      const item = globalParsedItems[i];
+      if (item && item.files && item.files.length > 0) {
+        let hasValidVideo = false;
+
+        for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
+          const f = item.files[fIdx];
+
+          // If the file is missing or has no path, we can't load it, so skip it completely
+          if (!f.resolvedPath) continue;
+
+          hasValidVideo = true;
+
+          if (!f.isLoaded && !f.isLoading) {
+            f.isLoading = true;
+
+            const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+            const slotToUse = await getSafeSlot(baseSlotToUse);
+            inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
+
+            const dummyItemForVmix = { ...item, ...f, _sourceFileObj: f, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx, _automationCode: item.automationCode };
+
+            const entry = allRows[i] ? allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`) : null;
+            const btn = entry ? (entry.querySelector('.btn-run-file') || entry.querySelector('.btn-run')) : null;
+            if (btn) btn.innerText = "Loading...";
+
+            enqueueVmixAction(async () => {
+              try {
+                const result = await sendToVmix(dummyItemForVmix, slotToUse);
+                f.loadedSlot = slotToUse;
+                if (result !== false) {
+                  f.isLoaded = true;
+                  f.isLoading = false;
+                  syncFileVisualState(item, fIdx);
+                } else {
+                  f.isLoading = false;
+                  syncFileVisualState(item, fIdx);
+                }
+              } catch (e) {
+                console.error("Auto Load error:", e);
+                f.isLoading = false;
+                if (btn) {
+                  btn.innerText = "ERROR";
+                  btn.classList.replace('primary', 'danger');
+                }
+                f.isLoading = false;
+              }
+            });
           }
-          if (hasValidVideo) {
-            lookAheadCount++;
-          }
-       }
+        }
+        if (hasValidVideo) {
+          lookAheadCount++;
+        }
+      }
     }
   };
+
+  readAheadInterval = setInterval(tick, 2000);
 }
 startReadAheadQueue();
 

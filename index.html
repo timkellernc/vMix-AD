@@ -12,17 +12,19 @@
 
   <header class="top-bar">
     <div class="logo" style="flex: 0 0 auto; display: flex; justify-content: flex-start;">
-      <h1 id="top-clock-display" style="font-family: monospace; font-size: clamp(1rem, 2vw, 1.5rem); letter-spacing: 1px; white-space: nowrap; margin: 0;">00:00:00 AM</h1>
+      <h1 id="top-clock-display"
+        style="font-family: monospace; font-size: clamp(1rem, 2vw, 1.5rem); letter-spacing: 1px; white-space: nowrap; margin: 0;">
+        00:00:00 AM</h1>
     </div>
 
     <div
       style="flex: 5; display: flex; justify-content: center; align-items: center; gap: 12px; padding: 0 20px; overflow: hidden;">
+      <button id="btn-reset-rundown" class="btn danger small" title="Reset Rundown to Default States">Reset</button>
       <button id="active-rundown-title" class="btn secondary"
         style="width: 100%; max-width: 400px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;"
         title="Select Rundown">
         Select Rundown
       </button>
-      <button id="btn-reset-rundown" class="btn danger small" title="Reset Rundown to Default States">Reset</button>
       <button id="btn-refresh-rundown" class="btn secondary small" title="Sync with Rundown Creator">Refresh</button>
     </div>
 
@@ -37,7 +39,7 @@
 
       <div id="top-timer-display"
         style="flex: 0; display: flex; justify-content: flex-start; gap: 16px; align-items: center; visibility: hidden; opacity: 0; transition: opacity 0.3s; background: rgba(0,0,0,0.3); padding: 4px 16px; border-radius: 8px; border: 1px solid var(--panel-border); font-family: monospace; white-space: nowrap;">
-        
+
         <div id="timer-live-content" style="display: flex; gap: 16px; align-items: center;">
           <div style="text-align: center; line-height: 1.2;">
             <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Block Elap</div>
@@ -49,20 +51,24 @@
           </div>
           <div style="text-align: center; line-height: 1.2;">
             <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Remaining</div>
-            <div id="timer-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
+            <div id="timer-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00
+            </div>
           </div>
           <div style="text-align: center; line-height: 1.2;">
             <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Rem in Block</div>
-            <div id="timer-block-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">00:00</div>
+            <div id="timer-block-remaining" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">
+              00:00</div>
           </div>
-          <div style="text-align: center; line-height: 1.2; border-left: 1px solid var(--panel-border); padding-left: 16px;">
+          <div
+            style="text-align: center; line-height: 1.2; border-left: 1px solid var(--panel-border); padding-left: 16px;">
             <div style="font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase;">Over / Under</div>
             <div id="timer-on-over" style="font-size: 1.2em; font-weight: bold; color: var(--text-primary);">--:--</div>
           </div>
         </div>
 
         <div id="timer-idle-content" style="display: none; align-items: center; justify-content: center; width: 100%;">
-          <div id="timer-idle-text" style="font-size: 1.2em; font-weight: bold; color: var(--text-secondary); letter-spacing: 0.5px;"></div>
+          <div id="timer-idle-text"
+            style="font-size: 1.2em; font-weight: bold; color: var(--text-secondary); letter-spacing: 0.5px;"></div>
         </div>
 
       </div>
@@ -87,7 +93,8 @@
       style="display: flex; align-items: center; padding: 0 4px 6px 12px; color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--panel-border); margin-bottom: 8px;">
       <div style="width: 40px;">Idx</div>
       <div style="width: 50px;">Page</div>
-      <div style="flex: 3; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Slug / Segment</div>
+      <div style="flex: 3; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Slug / Segment
+      </div>
       <div style="width: 140px; text-align: center;">Automation</div>
       <div style="flex: 4; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
         <div style="padding: 4px 8px; margin: 2px 0; border: 1px solid transparent;">Media Files</div>
@@ -115,6 +122,14 @@
         <button id="btn-close-settings" class="close-btn">&times;</button>
       </div>
       <div class="modal-body">
+
+        <div class="settings-group">
+          <h3>Transitions</h3>
+          <label>
+            Default Transition Duration (ms):
+            <input type="number" id="setting-fade-duration" placeholder="e.g. 500" value="500">
+          </label>
+        </div>
 
         <div class="settings-group">
           <h3>RundownCreator API</h3>
@@ -193,7 +208,8 @@
             Automation Column Name (Rundown Creator):
             <input type="text" id="setting-automation-column" value="Switcher">
           </label>
-          <button id="btn-open-mappings" class="btn secondary mt-2" style="width: 100%;">Configure Automation Mappings...</button>
+          <button id="btn-open-mappings" class="btn secondary mt-2" style="width: 100%;">Configure Automation
+            Mappings...</button>
         </div>
 
         <div class="settings-group">
@@ -275,9 +291,10 @@
       </div>
       <div class="modal-body" style="padding: 16px; overflow-y: auto;">
         <p style="margin-bottom: 16px; color: var(--text-secondary); font-size: 0.9rem;">
-          Map custom prefixes (e.g., C, M, CG, D) to vMix Inputs and Functions. The parser will read codes like `C1M1CG1` and execute the corresponding vMix commands.
+          Map custom prefixes (e.g., C, M, CG, D) to vMix Inputs and Functions. The parser will read codes like
+          `C1M1CG1` and execute the corresponding vMix commands.
         </p>
-        
+
         <table style="width: 100%; text-align: left; border-collapse: collapse; margin-bottom: 12px;">
           <thead>
             <tr style="border-bottom: 1px solid var(--panel-border);">
@@ -292,7 +309,7 @@
             <!-- Dynamic rows inserted here -->
           </tbody>
         </table>
-        
+
         <button id="btn-add-mapping" class="btn secondary small">+ Add New Mapping</button>
       </div>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px;">

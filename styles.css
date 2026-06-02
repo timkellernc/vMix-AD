@@ -107,6 +107,26 @@ h3 {
   box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
 }
 
+.btn-run-auto {
+  background-color: #007aff;
+  color: #fff;
+  border-color: #007aff;
+}
+
+.btn-run-auto.program {
+  background-color: var(--error);
+  border-color: var(--error);
+  color: #fff;
+  animation: pulse-border 1.5s infinite;
+}
+
+.btn-run-auto:hover {
+  background-color: #0062cc;
+  border-color: #0062cc;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+}
+
 @keyframes pulseRefresh {
   0% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7); background-color: var(--panel-bg); color: var(--text-primary); border-color: var(--accent); }
   50% { box-shadow: 0 0 0 10px rgba(255, 59, 48, 0); background-color: rgba(255, 59, 48, 0.2); color: #fff; border-color: var(--accent); }
@@ -701,4 +721,11 @@ input:focus {
 .btn.success:hover {
   background: rgba(255, 255, 255, 0.2);
   color: #fff;
+}
+
+.btn-run-auto.preview {
+  background: #28a745 !important;
+  color: #fff !important;
+  border-color: #28a745 !important;
+  box-shadow: 0 0 10px rgba(40, 167, 69, 0.6) !important;
 }
