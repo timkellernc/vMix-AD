@@ -49,7 +49,7 @@ let fallbackDictionary = {};
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
+    width: 1200,
     height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -72,7 +72,7 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
-  
+
   // Scan defaults directory on startup if it exists
   const defaultsDir = store.get('defaultsDirectory');
   if (defaultsDir) {
@@ -143,7 +143,7 @@ function isFileReady(filePath) {
       return false; // File is locked (still being exported/written)
     }
     // If it's read-only or another error occurs, assume it exists but cannot be written
-    return true; 
+    return true;
   }
 }
 
@@ -168,7 +168,7 @@ function deepScanFiles(dir, fileList = []) {
 function scanDefaultsDirectory(dirPath) {
   fallbackDictionary = {};
   if (!dirPath || !fs.existsSync(dirPath)) return;
-  
+
   const allFiles = deepScanFiles(dirPath);
   for (const filePath of allFiles) {
     const filename = path.basename(filePath).toLowerCase();
@@ -190,13 +190,13 @@ ipcMain.handle('scan-defaults-now', () => {
 
 ipcMain.handle('resolve-media', (event, filename) => {
   if (!filename) return null;
-  
+
   const showDir = store.get('showDirectory');
-  
+
   // Check if filename is an absolute path
   if (path.isAbsolute(filename)) {
-      if (isFileReady(filename)) return { path: filename, isFallback: false };
-      filename = path.basename(filename);
+    if (isFileReady(filename)) return { path: filename, isFallback: false };
+    filename = path.basename(filename);
   }
 
   const ext = getExt(filename);
@@ -253,9 +253,9 @@ ipcMain.handle('rundown-request', async (event, action, params = {}) => {
     const station = store.get('rundownCreatorRadioStation');
     const apiKey = store.get('rundownCreatorAPIKey');
     const apiToken = store.get('rundownCreatorAPIToken');
-    
+
     if (!station || !apiKey || !apiToken) {
-        return { success: false, error: "Missing RundownCreator credentials in settings." };
+      return { success: false, error: "Missing RundownCreator credentials in settings." };
     }
 
     const queryParams = new URLSearchParams({

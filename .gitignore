@@ -2,3 +2,4 @@ electron.zip
 /node_modules
 /Legacy
 /dist
+renderer_old.js
