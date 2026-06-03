@@ -84,6 +84,7 @@ const btnAddMapping = document.getElementById('btn-add-mapping');
 const mappingsTbody = document.getElementById('mappings-tbody');
 
 let automationMappings = [];
+let draggedMappingRow = null;
 const scanResult = document.getElementById('scan-result');
 
 let globalParsedItems = []; // Store parsed items to support batch loading
@@ -340,7 +341,8 @@ btnSaveMappings.addEventListener('click', async () => {
       prefix: prefix,
       type: row.querySelector('.map-type').value,
       function: row.querySelector('.map-func').value.trim(),
-      target: row.querySelector('.map-target').value.trim()
+      target: row.querySelector('.map-target').value.trim(),
+      value: row.querySelector('.map-value') ? row.querySelector('.map-value').value.trim() : ''
     });
   });
 
@@ -349,18 +351,18 @@ btnSaveMappings.addEventListener('click', async () => {
 });
 
 btnAddMapping.addEventListener('click', () => {
-  addMappingRow({ prefix: '', type: 'Input', function: 'Cut', target: '' });
+  addMappingRow({ prefix: '', type: 'Input', function: 'Cut', target: '', value: '' });
 });
 
 function renderMappingsTable() {
   mappingsTbody.innerHTML = '';
   if (automationMappings.length === 0) {
     // Add default examples if empty
-    addMappingRow({ prefix: 'C', type: 'Input', function: 'Cut', target: 'Camera 1' });
-    addMappingRow({ prefix: 'M', type: 'Mic', function: 'AudioOn', target: 'Anchor Mic' });
-    addMappingRow({ prefix: 'CG', type: 'Overlay', function: 'OverlayInput1In', target: 'LowerThird.gtzip' });
-    addMappingRow({ prefix: 'CGO', type: 'Overlay', function: 'OverlayInput1Out', target: 'LowerThird.gtzip' });
-    addMappingRow({ prefix: 'D', type: 'Transition', function: 'Fade', target: '' });
+    addMappingRow({ prefix: 'C', type: 'Input', function: 'Cut', target: 'Camera 1', value: '' });
+    addMappingRow({ prefix: 'M', type: 'Mic', function: 'AudioOn', target: 'Anchor Mic', value: '' });
+    addMappingRow({ prefix: 'CG', type: 'Overlay', function: 'OverlayInput1In', target: 'LowerThird.gtzip', value: '' });
+    addMappingRow({ prefix: 'CGO', type: 'Overlay', function: 'OverlayInput1Out', target: 'LowerThird.gtzip', value: '' });
+    addMappingRow({ prefix: 'D', type: 'Transition', function: 'Fade', target: '', value: '' });
   } else {
     automationMappings.forEach(m => addMappingRow(m));
   }
@@ -368,8 +370,10 @@ function renderMappingsTable() {
 
 function addMappingRow(mapping) {
   const tr = document.createElement('tr');
+  tr.draggable = true;
   tr.innerHTML = `
-    <td><input type="text" class="map-prefix" value="${mapping.prefix}" placeholder="e.g. C" style="width: 60px;"></td>
+    <td class="drag-handle" style="cursor: grab; color: var(--text-secondary); text-align: center; user-select: none;">☰</td>
+    <td><input type="text" class="map-prefix" value="${mapping.prefix || ''}" placeholder="e.g. C" style="width: 60px;"></td>
     <td>
       <select class="map-type">
         <option value="Input" ${mapping.type === 'Input' ? 'selected' : ''}>Input (Camera/Video)</option>
@@ -379,11 +383,59 @@ function addMappingRow(mapping) {
         <option value="Destination" ${mapping.type === 'Destination' ? 'selected' : ''}>Destination (Monitor/Mix)</option>
       </select>
     </td>
-    <td><input type="text" class="map-func" value="${mapping.function}" placeholder="e.g. Cut" style="width: 120px;"></td>
-    <td><input type="text" class="map-target" value="${mapping.target}" placeholder="e.g. Camera 1" style="width: 150px;"></td>
+    <td><input type="text" class="map-func" value="${mapping.function || ''}" placeholder="e.g. Cut" style="width: 120px;"></td>
+    <td><input type="text" class="map-target" value="${mapping.target || ''}" placeholder="e.g. Camera 1" style="width: 150px;"></td>
+    <td><input type="text" class="map-value" value="${mapping.value || ''}" placeholder="e.g. 1" style="width: 80px;"></td>
     <td><button class="btn danger small btn-remove-mapping">&times;</button></td>
   `;
   tr.querySelector('.btn-remove-mapping').addEventListener('click', () => tr.remove());
+
+  tr.addEventListener('dragstart', (e) => {
+    draggedMappingRow = tr;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', tr.innerHTML);
+    tr.style.opacity = '0.5';
+  });
+
+  tr.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+  });
+
+  tr.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    tr.style.borderTop = '2px solid var(--accent-color)';
+  });
+
+  tr.addEventListener('dragleave', () => {
+    tr.style.borderTop = '';
+  });
+
+  tr.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tr.style.borderTop = '';
+    if (draggedMappingRow && draggedMappingRow !== tr) {
+      const tbody = tr.parentNode;
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const draggedIndex = rows.indexOf(draggedMappingRow);
+      const targetIndex = rows.indexOf(tr);
+      if (draggedIndex < targetIndex) {
+        tbody.insertBefore(draggedMappingRow, tr.nextSibling);
+      } else {
+        tbody.insertBefore(draggedMappingRow, tr);
+      }
+    }
+    return false;
+  });
+
+  tr.addEventListener('dragend', () => {
+    tr.style.opacity = '1';
+    document.querySelectorAll('#mappings-tbody tr').forEach(row => row.style.borderTop = '');
+    draggedMappingRow = null;
+  });
+
   mappingsTbody.appendChild(tr);
 }
 
@@ -535,11 +587,13 @@ async function sendToVmix(item, slotIndex) {
     if (!item.requestedFile) return; // Completely empty row, should never happen here
     isPlaceholder = true;
     item.isPlaceholderLoaded = true;
+    if (item._sourceFileObj) item._sourceFileObj.isPlaceholderLoaded = true;
     let appDir = decodeURIComponent(window.location.pathname.substring(1));
     appDir = appDir.substring(0, appDir.lastIndexOf('/'));
     targetPath = appDir + '/placeholder.png';
   } else {
     item.isPlaceholderLoaded = false;
+    if (item._sourceFileObj) item._sourceFileObj.isPlaceholderLoaded = false;
   }
 
   const ext = isPlaceholder ? 'png' : getExt(item.originalFile);
@@ -718,7 +772,7 @@ function appendRowItem(item, insertBeforeNode = null) {
 
   let newFilesSig = item.automationCode || '';
   if (item.files) {
-    newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
+    newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
   if (item.isCustom) newFilesSig += '||CUSTOM';
   row.dataset.filesSig = newFilesSig;
@@ -1189,24 +1243,40 @@ function attachFilesEventListeners(item, row) {
       btnRun.addEventListener('click', async () => {
         if (btnRun.innerText === "Sending...") return;
 
-        enqueueVmixAction(async () => {
-          btnRun.innerText = "Sending...";
-          const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
-          const slotToUse = await getSafeSlot(baseSlotToUse);
-          inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
+        if (!fileObj.isLoaded) {
+          enqueueVmixAction(async () => {
+            btnRun.innerText = "Sending...";
+            const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+            const slotToUse = await getSafeSlot(baseSlotToUse);
+            inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
 
-          // Use fileObj instead of item for sendToVmix
-          const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
-          const result = await sendToVmix(dummyItemForVmix, slotToUse);
+            // Use fileObj instead of item for sendToVmix
+            const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
+            const result = await sendToVmix(dummyItemForVmix, slotToUse);
 
-          if (result !== false) { // If it didn't explicitly fail
-            fileObj.isLoaded = true;
-            fileObj.isLoading = false;
-            syncFileVisualState(item, fileIndex);
-          } else {
-            btnRun.innerText = "Load";
+            if (result !== false) { // If it didn't explicitly fail
+              fileObj.isLoaded = true;
+              fileObj.isLoading = false;
+              syncFileVisualState(item, fileIndex);
+            } else {
+              btnRun.innerText = "Load";
+            }
+          });
+        } else {
+          if (fileObj.isPlaceholderLoaded) {
+            showToast("Cannot transition to a placeholder. File is missing.");
+            return;
           }
-        });
+          // Trigger the transition
+          const defaultTransitionFunc = 'Cut';
+          const prefix = inPrefix.value || 'Video';
+          const inputName = `${prefix} ${fileObj.loadedSlot}`;
+          if (fileObj.loadedSlot) {
+            window.api.vmixRequest(`Function=${defaultTransitionFunc}&Input=${encodeURIComponent(inputName)}`);
+            // Reset active automation index since we took a manual action
+            activeOnAirCmdIndex = -1;
+          }
+        }
       });
     }
   });
@@ -1251,7 +1321,7 @@ function updateRowItem(item, row, newIndex) {
 
   let newFilesSig = item.automationCode || '';
   if (item.files) {
-    newFilesSig = item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
+    newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
   if (item.isCustom) newFilesSig += '||CUSTOM';
 
@@ -1488,6 +1558,15 @@ inCurrentIndex.addEventListener('keydown', (e) => {
     inCurrentIndex.value = 1;
   }
 });
+
+function startReadAheadQueue() {
+  if (readAheadInterval) clearInterval(readAheadInterval);
+  const tick = async () => {
+    await processReadAheadQueue();
+  };
+  tick();
+  readAheadInterval = setInterval(tick, 4000);
+}
 
 // Legacy keyboard shortcuts removed (merged to global hotkeys at end of file)
 
@@ -1829,6 +1908,8 @@ async function loadApiRundown(rundownId, preserveState = false, rundownTitle = '
     }
 
     renderRows(parsedItems);
+    
+    syncAutomationUI(); // Immediately sync UI before background polls to ensure correct initial state
 
     window.lastRundownSignature = getApiRowsSignature(res.data);
     btnRefreshRundown.classList.remove('pulse-refresh');
@@ -1959,6 +2040,8 @@ btnLoadCsv.addEventListener('click', () => {
         }
       }
       renderRows(parsedItems);
+      
+      syncAutomationUI(); // Immediately sync UI after CSV load
 
       // Clear auto-load memory since we switched to a CSV backup
       await window.api.saveSettings({ lastRundownId: null, lastRundownTitle: null });
@@ -2697,6 +2780,51 @@ function getNextStepCursor() {
   }
 }
 
+
+
+async function calculatePreviewDelay() {
+  let previewDelayMs = 1000;
+  if (activeOnAirRowId && globalParsedItems) {
+    const onAirIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(activeOnAirRowId));
+    if (onAirIndex >= 0) {
+      const currentItem = globalParsedItems[onAirIndex];
+      const cmds = currentItem.automationCode ? currentItem.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+      if (activeOnAirCmdIndex >= 0 && activeOnAirCmdIndex < cmds.length) {
+        const cmdStr = cmds[activeOnAirCmdIndex];
+        const parsedArrays = parseAutomationCode(cmdStr);
+        const tokens = parsedArrays.length > 0 ? parsedArrays[0] : [];
+        
+        let func = 'Cut';
+        const destToken = tokens.find(t => t.type === 'Destination');
+        if (destToken && destToken.function) func = destToken.function;
+        const transToken = tokens.find(t => t.type === 'Transition');
+        if (transToken && transToken.function) func = transToken.function;
+
+        try {
+          const res = await window.api.vmixRequest('');
+          if (res && res.success) {
+            const parser = new DOMParser();
+            const xml = parser.parseFromString(res.data, "text/xml");
+            const transitions = xml.querySelectorAll('transitions transition');
+            for (let t of transitions) {
+              const num = t.getAttribute('number');
+              const eff = t.getAttribute('effect');
+              const dur = t.getAttribute('duration');
+              if (eff === func) {
+                if (dur && parseInt(dur, 10) > 0) {
+                  previewDelayMs = (parseInt(dur, 10) * 2) + 200;
+                }
+                break;
+              }
+            }
+          }
+        } catch (e) { }
+      }
+    }
+  }
+  return previewDelayMs;
+}
+
 function syncAutomationUI() {
   const nextCursor = getNextStepCursor();
 
@@ -2705,9 +2833,15 @@ function syncAutomationUI() {
       lastPreviewCursorRow = nextCursor.row;
       lastPreviewCursorCmd = nextCursor.cmd;
       if (previewTimeout) clearTimeout(previewTimeout);
-      previewTimeout = setTimeout(() => {
-        previewNextCommand(nextCursor);
-      }, 1000); // Wait 1s for any active transitions to finish
+      
+      calculatePreviewDelay().then(delayMs => {
+        if (lastPreviewCursorRow === nextCursor.row && lastPreviewCursorCmd === nextCursor.cmd) {
+          if (previewTimeout) clearTimeout(previewTimeout);
+          previewTimeout = setTimeout(() => {
+            previewNextCommand(nextCursor);
+          }, delayMs);
+        }
+      });
     }
   } else {
     lastPreviewCursorRow = -1;
@@ -3003,6 +3137,10 @@ async function executeTake(item, parsedTokensArray, rowElement) {
       return current;
     }, rowElement);
   }
+  
+  // Force a read-ahead queue pass immediately after taking a row,
+  // so the next items are loaded into vMix before we try to preview them!
+  await processReadAheadQueue();
 }
 
 async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowElement) {
@@ -3067,23 +3205,10 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
           await sendToVmix(dummyItemForVmix, slotToUse);
           finalSlot = slotToUse;
 
-          const fileEntry = rowElement.querySelector(`.file-entry[data-file-index="${fileIndex}"]`);
-          if (fileEntry) {
-            const btnRun = fileEntry.querySelector('.btn-run-file');
-            if (btnRun) {
-              btnRun.classList.remove('primary');
-              btnRun.classList.add('success');
-              btnRun.innerText = targetFileObj.isPlaceholderLoaded ? "Searching..." : `Loaded [${slotToUse}]`;
-            }
-            fileEntry.classList.add('loaded', 'sent');
-            if (targetFileObj.isPlaceholderLoaded) {
-              fileEntry.classList.add('placeholder-loaded');
-            }
-          }
-          if (item.files && item.files.every(f => f.isLoaded)) {
-            item.isLoaded = true;
-            rowElement.classList.add('loaded', 'sent');
-          }
+          targetFileObj.isLoaded = dummyItemForVmix.isLoaded;
+          targetFileObj.loadedSlot = dummyItemForVmix.loadedSlot;
+          targetFileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
+          syncFileVisualState(item, fileIndex);
 
           // Force complete re-render to guarantee UI is correct locally
           const rowIndex = globalParsedItems.findIndex(i => String(i.rowId) === String(item.rowId));
@@ -3100,10 +3225,12 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
         const inputName = `${prefix} ${finalSlot}`;
         const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : defaultTransitionFunc);
         const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : '';
-        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+        if (!targetFileObj.isPlaceholderLoaded) {
+          await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
 
-        if (token.function === 'SOT') {
-          await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(inputName)}`);
+          if (token.function === 'SOT') {
+            await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(inputName)}`);
+          }
         }
 
         currentDestination = null;
@@ -3118,9 +3245,10 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
       if (token.number !== null) {
         target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
       }
-      const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : defaultTransitionFunc);
+      const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : (token.function || defaultTransitionFunc));
       const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : '';
-      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}${durParam}`);
+      const valParam = token.value ? `&Value=${encodeURIComponent(token.value)}` : '';
+      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}${durParam}${valParam}`);
       currentDestination = null;
     } else if (token.type === 'Overlay') {
       let target = token.target;
@@ -3141,7 +3269,8 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
           else if (func.match(/OverlayInput\d$/)) func = func + 'Out';
           else func = func + "Out";
         }
-        await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}`);
+        const valParam = token.value ? `&Value=${encodeURIComponent(token.value)}` : '';
+        await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${valParam}`);
       }
     }
   }
@@ -3159,6 +3288,10 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
         const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: 0 };
         await sendToVmix(dummyItemForVmix, slotToUse);
         finalSlot = slotToUse;
+        targetFileObj.isLoaded = dummyItemForVmix.isLoaded;
+        targetFileObj.loadedSlot = dummyItemForVmix.loadedSlot;
+        targetFileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
+        syncFileVisualState(item, 0);
       } else {
         finalSlot = targetFileObj.loadedSlot;
       }
@@ -3168,7 +3301,9 @@ async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowEleme
       const mixParam = `&Mix=${currentDestination}`;
       const funcToUse = explicitTransitionFunc || currentDestFunc || defaultTransitionFunc;
       const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : '';
-      await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+      if (!targetFileObj.isPlaceholderLoaded) {
+        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+      }
     }
   }
 }
@@ -3190,27 +3325,25 @@ async function getSafeSlot(desiredSlot) {
 
 let readAheadInterval = null;
 
-function startReadAheadQueue() {
-  if (readAheadInterval) clearInterval(readAheadInterval);
-  const tick = async () => {
-    if (!globalParsedItems || globalParsedItems.length === 0) return;
+async function processReadAheadQueue() {
+  if (!globalParsedItems || globalParsedItems.length === 0) return;
 
-    // Find the currently on-air row index
-    const allRows = Array.from(document.querySelectorAll('.row-item'));
-    let currentIndex = allRows.findIndex(r => r.classList.contains('on-air'));
+  // Find the currently on-air row index
+  const allRows = Array.from(document.querySelectorAll('.row-item'));
+  let currentIndex = allRows.findIndex(r => r.classList.contains('on-air'));
 
-    if (currentIndex === -1) {
-      hasTriggeredAutomation = false;
-      return;
-    }
+  if (currentIndex === -1) {
+    hasTriggeredAutomation = false;
+    return;
+  }
 
-    if (!hasTriggeredAutomation) {
-      return;
-    }
+  if (!hasTriggeredAutomation) {
+    return;
+  }
 
-    // Check up to 3 rows ahead
-    const maxLookAhead = 3;
-    let lookAheadCount = 0;
+  // Check up to 3 rows ahead
+  const maxLookAhead = 3;
+  let lookAheadCount = 0;
 
     for (let i = currentIndex; i < globalParsedItems.length && lookAheadCount < maxLookAhead; i++) {
       const item = globalParsedItems[i];
@@ -3220,8 +3353,7 @@ function startReadAheadQueue() {
         for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
           const f = item.files[fIdx];
 
-          // If the file is missing or has no path, we can't load it, so skip it completely
-          if (!f.resolvedPath) continue;
+          // We now load placeholders for missing files, so we don't skip them.
 
           hasValidVideo = true;
 
@@ -3267,9 +3399,13 @@ function startReadAheadQueue() {
         }
       }
     }
-  };
-
-  readAheadInterval = setInterval(tick, 2000);
 }
-startReadAheadQueue();
 
+function startReadAheadQueue() {
+  if (readAheadInterval) clearInterval(readAheadInterval);
+  const tick = async () => {
+    await processReadAheadQueue();
+  };
+  tick();
+  readAheadInterval = setInterval(tick, 4000);
+}
