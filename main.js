@@ -236,8 +236,8 @@ ipcMain.handle('resolve-media', (event, filename) => {
 ipcMain.handle('vmix-request', async (event, commandStr) => {
   try {
     const ip = store.get('vmixIP') || '127.0.0.1:8088';
-    const url = `http://${ip}/API/?${commandStr}`;
-    console.log(`[${new Date().toISOString()}] [API CALL] vMix - Command: ${commandStr}`);
+    const url = commandStr ? `http://${ip}/API/?${commandStr}` : `http://${ip}/API/`;
+    console.log(`[${new Date().toISOString()}] [API CALL] vMix - Command: ${commandStr || 'XML State Request'}`);
     const response = await fetch(url);
     const text = await response.text();
     return { success: response.ok, data: text };

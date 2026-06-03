@@ -8,7 +8,7 @@ export function getNextStepCursor() {
   const getFirstCmdOfRow = (rIdx) => {
     if (rIdx >= state.globalParsedItems.length) return null;
     const item = state.globalParsedItems[rIdx];
-    const cmds = item.automationCode ? item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+    const cmds = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
     return { row: rIdx, cmd: cmds.length > 0 ? 0 : -1 };
   };
 
@@ -20,7 +20,7 @@ export function getNextStepCursor() {
   if (currentIndex === -1) return getFirstCmdOfRow(0);
 
   const currentItem = state.globalParsedItems[currentIndex];
-  const cmds = currentItem.automationCode ? currentItem.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+  const cmds = currentItem.automationCode ? currentItem.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
 
   if (state.activeOnAirCmdIndex + 1 < cmds.length) {
     return { row: currentIndex, cmd: state.activeOnAirCmdIndex + 1 };
@@ -35,7 +35,7 @@ export async function calculatePreviewDelay() {
     const onAirIndex = state.globalParsedItems.findIndex(i => String(i.rowId) === String(state.activeOnAirRowId));
     if (onAirIndex >= 0) {
       const currentItem = state.globalParsedItems[onAirIndex];
-      const cmds = currentItem.automationCode ? currentItem.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+      const cmds = currentItem.automationCode ? currentItem.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
       if (state.activeOnAirCmdIndex >= 0 && state.activeOnAirCmdIndex < cmds.length) {
         const cmdStr = cmds[state.activeOnAirCmdIndex];
         const parsedArrays = parseAutomationCode(cmdStr);
@@ -159,7 +159,7 @@ export async function executeNextSpacebarAction() {
       await startTimerOnRowId(item.rowId);
     }
 
-    const cmds = item.automationCode ? item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+    const cmds = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
     const cmdToTake = cmds[nextCursor.cmd];
     const rowEl = document.getElementById(`row-item-${nextCursor.row + 1}`);
 
@@ -185,14 +185,13 @@ export async function previewNextCommand(cursor) {
   if (destToken) {
     destMix = destToken.number !== null ? destToken.number : (destToken.target !== undefined ? destToken.target : null);
   }
-  
-  let mixParam = '';
-  if (destMix !== null && destMix !== '') {
-    const mixIndex = await resolveMixIndex(destMix);
-    if (mixIndex !== '') {
-      mixParam = `&Mix=${mixIndex}`;
+    let mixParam = '';
+    if (destMix !== null && destMix !== '') {
+      const mixIndex = await resolveMixIndex(destMix);
+      if (mixIndex !== undefined && mixIndex !== null && mixIndex !== '') {
+        mixParam = `&Mix=${mixIndex}`;
+      }
     }
-  }
   const inputToken = tokens.find(t => t.type === 'Input');
 
   if (inputToken) {
@@ -209,6 +208,7 @@ export async function previewNextCommand(cursor) {
   const hasSot = tokens.some(t => t.type === 'Macro' && t.function === 'SOT');
   const hasVo = tokens.some(t => t.type === 'Macro' && t.function === 'VO');
   const hasDest = tokens.some(t => t.type === 'Destination');
+  const hasTrans = tokens.some(t => t.type === 'Transition');
 
   if (hasSot || hasVo || hasDest) {
     const prefix = dom.inPrefix.value || 'Video';
@@ -219,16 +219,50 @@ export async function previewNextCommand(cursor) {
         window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(inputName)}`);
       }
     }
+    return;
+  }
+
+  if (!hasTrans) {
+    try {
+      const res = await window.api.vmixRequest('');
+      if (res && res.success) {
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(res.data, "text/xml");
+        const activeNode = xml.querySelector('active');
+        if (activeNode) {
+          const activeNumber = activeNode.textContent;
+          window.api.vmixRequest(`Function=PreviewInput&Input=${activeNumber}`);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to sync preview to active program:", e);
+    }
   }
 }
 
 export function parseAutomationCode(codeString) {
   if (!codeString) return [];
   const commands = [];
-  const segments = codeString.split(';');
+
+  // Decode HTML entities that Rundown Creator might send
+  let decodedCode = codeString
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+
+  // Split commands by semicolon (e.g. "SOT; MON1")
+  const segments = decodedCode.split(';');
 
   for (let segment of segments) {
-    let text = segment.replace(/\s+/g, '').toUpperCase();
+    let quotes = [];
+    let cleanSegment = segment.replace(/(["'“”‘’])(.*?)\1/g, (match, quote, content) => {
+      quotes.push(content);
+      return `__Q${quotes.length - 1}__`;
+    });
+
+    let text = cleanSegment.replace(/[\s,]+/g, '').toUpperCase();
     if (!text) continue;
 
     const sortedMappings = [...state.automationMappings].sort((a, b) => b.prefix.length - a.prefix.length);
@@ -250,10 +284,22 @@ export function parseAutomationCode(codeString) {
       for (const token of allTokens) {
         if (text.startsWith(token.prefix.toUpperCase())) {
           const remaining = text.substring(token.prefix.length);
-          const numMatch = remaining.match(/^(\d+)/);
-          const num = numMatch ? parseInt(numMatch[1], 10) : null;
+          let num = null;
+          let val = null;
+          let advancedRemaining = remaining;
 
-          let advancedRemaining = remaining.substring(num ? String(num).length : 0);
+          const quoteMatch = remaining.match(/^__Q(\d+)__/);
+          if (quoteMatch) {
+            val = quotes[parseInt(quoteMatch[1], 10)];
+            advancedRemaining = remaining.substring(quoteMatch[0].length);
+          } else {
+            const numMatch = remaining.match(/^(\d+)/);
+            if (numMatch) {
+              num = parseInt(numMatch[1], 10);
+              advancedRemaining = remaining.substring(numMatch[0].length);
+            }
+          }
+
           let isOff = false;
 
           if (token.type === 'Overlay') {
@@ -269,6 +315,7 @@ export function parseAutomationCode(codeString) {
           parsedTokens.push({
             ...token,
             number: num,
+            value: val,
             isOff: isOff
           });
 
@@ -344,7 +391,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
     let mixParam = '';
     if (currentDestination !== null && currentDestination !== '') {
       const mixIndex = await resolveMixIndex(currentDestination);
-      if (mixIndex !== '') {
+      if (mixIndex !== undefined && mixIndex !== null && mixIndex !== '') {
         mixParam = `&Mix=${mixIndex}`;
       }
     }
@@ -445,6 +492,21 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         const valParam = token.value ? `&Value=${encodeURIComponent(token.value)}` : '';
         if (target) await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${valParam}`);
       }
+    } else if (token.type === 'Custom API') {
+      let apiStr = token.target;
+      if (apiStr) {
+        if (!apiStr.toLowerCase().startsWith('function=')) {
+          apiStr = 'Function=' + apiStr;
+        }
+        if (token.value !== null) {
+          apiStr = apiStr.replace(/\{value\}/gi, encodeURIComponent(token.value));
+        } else if (token.number !== null) {
+          apiStr = apiStr.replace(/\{value\}/gi, encodeURIComponent(token.number));
+        } else {
+          apiStr = apiStr.replace(/\{value\}/gi, '');
+        }
+        await window.api.vmixRequest(apiStr);
+      }
     }
   }
 
@@ -475,7 +537,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
       let mixParam = '';
       if (currentDestination !== null && currentDestination !== '') {
         const mixIndex = await resolveMixIndex(currentDestination);
-        if (mixIndex !== '') {
+        if (mixIndex !== undefined && mixIndex !== null && mixIndex !== '') {
           mixParam = `&Mix=${mixIndex}`;
         }
       }

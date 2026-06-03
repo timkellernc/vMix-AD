@@ -248,12 +248,14 @@ export function addMappingRow(mapping) {
     <td class="drag-handle" style="cursor: grab; color: var(--text-secondary); text-align: center; user-select: none;">☰</td>
     <td><input type="text" class="map-prefix" value="${mapping.prefix || ''}" placeholder="e.g. C" style="width: 60px;"></td>
     <td>
-      <select class="map-type">
+      <select class="map-type" style="width: 140px;">
         <option value="Input" ${mapping.type === 'Input' ? 'selected' : ''}>Input (Camera/Video)</option>
+        <option value="Macro" ${mapping.type === 'Macro' ? 'selected' : ''}>Macro (SOT/VO)</option>
         <option value="Mic" ${mapping.type === 'Mic' ? 'selected' : ''}>Microphone</option>
         <option value="Overlay" ${mapping.type === 'Overlay' ? 'selected' : ''}>Overlay (CG)</option>
         <option value="Transition" ${mapping.type === 'Transition' ? 'selected' : ''}>Transition</option>
         <option value="Destination" ${mapping.type === 'Destination' ? 'selected' : ''}>Destination (Monitor/Mix)</option>
+        <option value="Custom API" ${mapping.type === 'Custom API' ? 'selected' : ''}>Custom API</option>
       </select>
     </td>
     <td><input type="text" class="map-func" value="${mapping.function || ''}" placeholder="e.g. Cut" style="width: 120px;"></td>

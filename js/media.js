@@ -139,16 +139,16 @@ export async function sendToVmix(item, slotIndex) {
     }
   });
 
-  await window.api.vmixRequest(`Function=RemoveInput&Input=${encodeURIComponent(inputName)}`);
-  await window.api.vmixRequest(`Function=AddInput&Value=${encodeURIComponent(type + '|' + targetPath)}`);
+  await window.api.vmixRequest(`Function=RemoveInput&Input=${inputName}`);
+  await window.api.vmixRequest(`Function=AddInput&Value=${type}|${targetPath}`);
 
   const initialInputName = isPlaceholder ? 'placeholder.png' : item.originalFile;
-  await window.api.vmixRequest(`Function=SetInputName&Value=${encodeURIComponent(inputName)}&Input=${encodeURIComponent(initialInputName)}`);
+  await window.api.vmixRequest(`Function=SetInputName&Value=${inputName}&Input=${initialInputName}`);
 
   const parallelCmds = [
-    `Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${encodeURIComponent(inputName)}`,
+    `Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${inputName}`,
     ...audioCmds,
-    `Function=AudioAutoOff&Input=${encodeURIComponent(inputName)}`
+    `Function=AudioAutoOff&Input=${inputName}`
   ];
 
   for (const cmd of parallelCmds) {

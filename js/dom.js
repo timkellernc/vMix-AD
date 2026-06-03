@@ -256,7 +256,7 @@ export function appendRowItem(item, insertBeforeNode = null) {
 
 export function buildAutoHtml(item) {
   if (!item.automationCode) return '';
-  const autoCommands = item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0);
+  const autoCommands = item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0);
   let html = '';
   autoCommands.forEach(cmd => {
     html += `<button class="btn small btn-run-auto" data-auto-cmd="${cmd}" style="margin: 2px;">${cmd}</button>`;
