@@ -39,7 +39,7 @@ export async function calculatePreviewDelay() {
       if (state.activeOnAirCmdIndex >= 0 && state.activeOnAirCmdIndex < cmds.length) {
         const cmdStr = cmds[state.activeOnAirCmdIndex];
         const parsedArrays = parseAutomationCode(cmdStr);
-        const tokens = parsedArrays.length > 0 ? parsedArrays[0] : [];
+        const tokens = parsedArrays.flat();
         
         let func = 'Cut';
         let explicitDur = null;
@@ -178,7 +178,7 @@ export async function previewNextCommand(cursor) {
 
   const cmdStr = cmds[cursor.cmd];
   const parsedArrays = parseAutomationCode(cmdStr);
-  const tokens = parsedArrays.length > 0 ? parsedArrays[0] : [];
+  const tokens = parsedArrays.flat();
 
   const destToken = tokens.find(t => t.type === 'Destination');
   let destMix = null;
@@ -252,18 +252,16 @@ export function parseAutomationCode(codeString) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>');
 
-  // Split commands by semicolon (e.g. "SOT; MON1")
-  const segments = decodedCode.split(';');
+  let quotes = [];
+  let cleanCode = decodedCode.replace(/(["'“”‘’])(.*?)\1/g, (match, quote, content) => {
+    quotes.push(content);
+    return `__Q${quotes.length - 1}__`;
+  });
 
-  for (let segment of segments) {
-    let quotes = [];
-    let cleanSegment = segment.replace(/(["'“”‘’])(.*?)\1/g, (match, quote, content) => {
-      quotes.push(content);
-      return `__Q${quotes.length - 1}__`;
-    });
+  const subCommands = cleanCode.split(/[\s,]+/).filter(c => c.trim().length > 0);
 
-    let text = cleanSegment.replace(/[\s,]+/g, '').toUpperCase();
-    if (!text) continue;
+  for (let subCmd of subCommands) {
+    let text = subCmd.toUpperCase();
 
     const sortedMappings = [...state.automationMappings].sort((a, b) => b.prefix.length - a.prefix.length);
 

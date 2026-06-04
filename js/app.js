@@ -227,7 +227,9 @@ dom.activeRundownTitle.addEventListener('click', async () => {
 dom.btnLoadRundown.addEventListener('click', async () => {
   const option = dom.selectRundown.options[dom.selectRundown.selectedIndex];
   const title = option ? option.innerText : dom.selectRundown.value;
+  await window.api.saveSettings({ lastRundownId: dom.selectRundown.value, lastRundownTitle: title });
   await loadApiRundown(dom.selectRundown.value, false, title);
+  dom.modalRundowns.classList.remove('visible');
 });
 
 dom.btnRefreshRundown.addEventListener('click', async () => {

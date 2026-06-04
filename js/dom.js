@@ -259,7 +259,8 @@ export function buildAutoHtml(item) {
   const autoCommands = item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0);
   let html = '';
   autoCommands.forEach(cmd => {
-    html += `<button class="btn small btn-run-auto" data-auto-cmd="${cmd}" style="margin: 2px;">${cmd}</button>`;
+    const escapedCmd = cmd.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    html += `<button class="btn small btn-run-auto" data-auto-cmd="${escapedCmd}" style="margin: 2px;">${escapedCmd}</button>`;
   });
   return html;
 }
