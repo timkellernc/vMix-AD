@@ -14,13 +14,13 @@ export async function init(isStartup = false) {
   dom.inPrefix.value = settings.inputPrefix || 'Video';
   dom.inFirstLoc.value = settings.firstInputLocation || 9;
   dom.inPoolSize.value = settings.poolSize || 15;
-  dom.inProtectProgram.checked = settings.protectProgram !== false; 
+  dom.inProtectProgram.checked = settings.protectProgram !== false;
   dom.inUse24Hr.checked = settings.use24Hr === true;
   state.currentAutomationColumnName = settings.automationColumnName || 'Switcher';
   dom.inAutomationColumn.value = state.currentAutomationColumnName;
   state.automationMappings = settings.automationMappings || [];
   dom.inFadeDuration.value = settings.fadeDuration || 500;
-  dom.inUse24Hr.checked = settings.use24Hr === true; 
+  dom.inUse24Hr.checked = settings.use24Hr === true;
 
   if (state.activeRundownId && dom.btnRefreshRundown) {
     dom.btnRefreshRundown.click();
@@ -72,7 +72,7 @@ export async function checkUnsavedScriptChanges() {
 
 export function setupSettingsListeners() {
   dom.btnOpenSettings.addEventListener('click', () => {
-    init(); 
+    init();
     dom.modalSettings.classList.add('visible');
   });
 
@@ -139,7 +139,7 @@ export function setupSettingsListeners() {
 
   window.addEventListener('mousedown', async (e) => {
     if (e.target.classList.contains('modal')) {
-      if (e.target.id === 'modal-confirm') return; 
+      if (e.target.id === 'modal-confirm') return;
 
       if (e.target.id === 'modal-script') {
         if (!(await checkUnsavedScriptChanges())) return;
@@ -243,12 +243,12 @@ let draggedMappingRow = null;
 
 export function addMappingRow(mapping) {
   const tr = document.createElement('tr');
-  tr.draggable = true;
+  tr.draggable = false;
   tr.innerHTML = `
     <td class="drag-handle" style="cursor: grab; color: var(--text-secondary); text-align: center; user-select: none;">☰</td>
-    <td><input type="text" class="map-prefix" value="${mapping.prefix || ''}" placeholder="e.g. C" style="width: 60px;"></td>
+    <td><input type="text" class="map-prefix" value="${mapping.prefix || ''}" placeholder="e.g. C" style="width: 100%; box-sizing: border-box;"></td>
     <td>
-      <select class="map-type" style="width: 140px;">
+      <select class="map-type" style="width: 100%; box-sizing: border-box;">
         <option value="Input" ${mapping.type === 'Input' ? 'selected' : ''}>Input (Camera/Video)</option>
         <option value="Macro" ${mapping.type === 'Macro' ? 'selected' : ''}>Macro (SOT/VO)</option>
         <option value="Mic" ${mapping.type === 'Mic' ? 'selected' : ''}>Microphone</option>
@@ -258,12 +258,17 @@ export function addMappingRow(mapping) {
         <option value="Custom API" ${mapping.type === 'Custom API' ? 'selected' : ''}>Custom API</option>
       </select>
     </td>
-    <td><input type="text" class="map-func" value="${mapping.function || ''}" placeholder="e.g. Cut" style="width: 120px;"></td>
-    <td><input type="text" class="map-target" value="${mapping.target || ''}" placeholder="e.g. Camera 1" style="width: 150px;"></td>
-    <td><input type="text" class="map-value" value="${mapping.value || ''}" placeholder="e.g. 1" style="width: 80px;"></td>
+    <td><input type="text" class="map-func" value="${mapping.function || ''}" placeholder="e.g. Cut" style="width: 100%; box-sizing: border-box;"></td>
+    <td><input type="text" class="map-target" value="${mapping.target || ''}" placeholder="e.g. Camera 1" style="width: 100%; box-sizing: border-box;"></td>
+    <td><input type="text" class="map-value" value="${mapping.value || ''}" placeholder="e.g. 1" style="width: 100%; box-sizing: border-box;"></td>
     <td><button class="btn danger small btn-remove-mapping">&times;</button></td>
   `;
   tr.querySelector('.btn-remove-mapping').addEventListener('click', () => tr.remove());
+
+  const dragHandle = tr.querySelector('.drag-handle');
+  dragHandle.addEventListener('mousedown', () => { tr.draggable = true; });
+  dragHandle.addEventListener('mouseup', () => { tr.draggable = false; });
+  dragHandle.addEventListener('mouseleave', () => { tr.draggable = false; });
 
   tr.addEventListener('dragstart', (e) => {
     draggedMappingRow = tr;
@@ -306,6 +311,7 @@ export function addMappingRow(mapping) {
   });
 
   tr.addEventListener('dragend', () => {
+    tr.draggable = false;
     tr.style.opacity = '1';
     document.querySelectorAll('#mappings-tbody tr').forEach(row => row.style.borderTop = '');
     draggedMappingRow = null;

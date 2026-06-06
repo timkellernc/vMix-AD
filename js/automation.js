@@ -281,7 +281,8 @@ export function parseAutomationCode(codeString) {
       let matched = false;
       for (const token of allTokens) {
         if (text.startsWith(token.prefix.toUpperCase())) {
-          const remaining = text.substring(token.prefix.length);
+          const matchedPrefix = token.prefix.toUpperCase();
+          const remaining = text.substring(matchedPrefix.length);
           let num = null;
           let val = null;
           let advancedRemaining = remaining;
@@ -298,9 +299,11 @@ export function parseAutomationCode(codeString) {
             }
           }
 
+          const matchingTokens = allTokens.filter(t => t.prefix.toUpperCase() === matchedPrefix);
+          const hasOverlay = matchingTokens.some(t => t.type === 'Overlay');
           let isOff = false;
 
-          if (token.type === 'Overlay') {
+          if (hasOverlay) {
             if (advancedRemaining.startsWith('OFF')) {
               isOff = true;
               advancedRemaining = advancedRemaining.substring(3);
@@ -310,12 +313,14 @@ export function parseAutomationCode(codeString) {
             }
           }
 
-          parsedTokens.push({
-            ...token,
-            number: num,
-            value: val,
-            isOff: isOff
-          });
+          for (const t of matchingTokens) {
+            parsedTokens.push({
+              ...t,
+              number: num,
+              parsedValue: val,
+              isOff: isOff
+            });
+          }
 
           text = advancedRemaining;
           matched = true;
@@ -464,7 +469,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
       if (target) {
         const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : (token.function || defaultTransitionFunc));
         const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : `&Duration=${defaultDuration}`;
-        const valParam = token.value ? `&Value=${encodeURIComponent(token.value)}` : '';
+        const valParam = token.parsedValue ? `&Value=${encodeURIComponent(token.parsedValue)}` : '';
         await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}${durParam}${valParam}`);
       }
       currentDestination = null;
@@ -487,17 +492,33 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
           else if (func.match(/OverlayInput\d$/)) func = func + 'Out';
           else func = func + "Out";
         }
-        const valParam = token.value ? `&Value=${encodeURIComponent(token.value)}` : '';
+        const valParam = token.parsedValue ? `&Value=${encodeURIComponent(token.parsedValue)}` : '';
         if (target) await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${valParam}`);
       }
     } else if (token.type === 'Custom API') {
-      let apiStr = token.target;
+      let apiStr = "";
+      
+      if (token.function && token.function.toLowerCase() !== 'custom') {
+        apiStr += `Function=${token.function}`;
+      }
+      
+      if (token.target) {
+        if (apiStr && !apiStr.endsWith('&')) apiStr += '&';
+        apiStr += token.target;
+      }
+      
+      if (token.value) {
+        if (apiStr && !apiStr.endsWith('&')) apiStr += '&';
+        apiStr += `Value=${token.value}`;
+      }
+
       if (apiStr) {
         if (!apiStr.toLowerCase().startsWith('function=')) {
           apiStr = 'Function=' + apiStr;
         }
-        if (token.value !== null) {
-          apiStr = apiStr.replace(/\{value\}/gi, encodeURIComponent(token.value));
+
+        if (token.parsedValue !== null) {
+          apiStr = apiStr.replace(/\{value\}/gi, encodeURIComponent(token.parsedValue));
         } else if (token.number !== null) {
           apiStr = apiStr.replace(/\{value\}/gi, encodeURIComponent(token.number));
         } else {

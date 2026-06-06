@@ -161,14 +161,17 @@ export async function sendToVmix(item, slotIndex) {
 }
 
 export async function processBatch(count, limitToSegment = false) {
-  const poolSize = parseInt(dom.inPoolSize.value) || 15;
-  let itemsSent = 0;
-  let targetSegment = null;
-
-  for (let i = 0; i < state.globalParsedItems.length; i++) {
-    const item = state.globalParsedItems[i];
-
-    if (!item.files || item.files.length === 0) continue;
+  state.isBatchProcessing = true;
+  try {
+    const poolSize = parseInt(dom.inPoolSize.value) || 15;
+    let itemsSent = 0;
+    let targetSegment = null;
+    const usedSlots = new Set();
+  
+    for (let i = 0; i < state.globalParsedItems.length; i++) {
+      const item = state.globalParsedItems[i];
+  
+      if (!item.files || item.files.length === 0) continue;
 
     for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
       const fileObj = item.files[fIdx];
@@ -198,6 +201,11 @@ export async function processBatch(count, limitToSegment = false) {
       const btn = entry ? entry.querySelector('.btn-run') : null;
 
       const slotToUse = await getSafeSlot(baseSlotToUse);
+      if (usedSlots.has(slotToUse)) {
+        return; 
+      }
+      usedSlots.add(slotToUse);
+
       dom.inCurrentIndex.value = (slotToUse + 1 > (parseInt(dom.inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
 
       if (btn) btn.innerText = "Sending...";
@@ -220,9 +228,13 @@ export async function processBatch(count, limitToSegment = false) {
       itemsSent++;
     }
   }
+  } finally {
+    state.isBatchProcessing = false;
+  }
 }
 
 export async function processReadAheadQueue() {
+  if (state.isBatchProcessing) return;
   if (!state.globalParsedItems || state.globalParsedItems.length === 0) return;
 
   const allRows = Array.from(document.querySelectorAll('.row-item'));
