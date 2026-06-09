@@ -504,7 +504,11 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
       
       if (token.target) {
         if (apiStr && !apiStr.endsWith('&')) apiStr += '&';
-        apiStr += token.target;
+        if (!token.target.includes('=')) {
+          apiStr += `Input=${encodeURIComponent(token.target)}`;
+        } else {
+          apiStr += token.target;
+        }
       }
       
       if (token.value) {
@@ -566,5 +570,38 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
       }
     }
+  }
+}
+
+export async function testRawAutomation(codeString) {
+  if (!codeString) return;
+  const parsedTokensArray = parseAutomationCode(codeString);
+  if (parsedTokensArray.length === 0) return;
+  
+  let defaultSlot = parseInt(dom.inFirstLoc.value) || 9;
+  
+  try {
+    const mediaModule = await import('./media.js');
+    if (mediaModule.usedSlots && mediaModule.usedSlots.length > 0) {
+      defaultSlot = mediaModule.usedSlots[0];
+    }
+  } catch (e) {
+    console.warn("Could not load used media slots for Sandbox Tester", e);
+  }
+
+  const mockItem = {
+    rowId: 'sandbox_test',
+    title: 'Sandbox Tester',
+    automationCode: codeString,
+    files: Array(10).fill({ loadedSlot: defaultSlot, isPlaceholderLoaded: false })
+  };
+
+  for (const tokens of parsedTokensArray) {
+    let mockVideoIndex = 0;
+    await executeAutomationTokens(mockItem, tokens, () => {
+      let current = mockVideoIndex;
+      mockVideoIndex++;
+      return current;
+    }, null);
   }
 }

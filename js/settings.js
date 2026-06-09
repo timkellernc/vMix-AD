@@ -2,6 +2,7 @@ import { state, dom } from './state.js';
 import { renderRows } from './dom.js';
 import { showToast } from './utils.js';
 import { refreshSignatureQuietly, loadApiRundown } from './api.js';
+import { testRawAutomation } from './automation.js';
 
 export async function init(isStartup = false) {
   const settings = await window.api.getSettings();
@@ -18,7 +19,33 @@ export async function init(isStartup = false) {
   dom.inUse24Hr.checked = settings.use24Hr === true;
   state.currentAutomationColumnName = settings.automationColumnName || 'Switcher';
   dom.inAutomationColumn.value = state.currentAutomationColumnName;
-  state.automationMappings = settings.automationMappings || [];
+
+  if (settings.mappingGroups) {
+    state.mappingGroups = settings.mappingGroups;
+  } else if (settings.automationMappings) {
+    // Migration from old flat array to grouped format
+    const groups = {};
+    settings.automationMappings.forEach(m => {
+      if (!groups[m.prefix]) {
+        groups[m.prefix] = {
+          id: 'group-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+          prefix: m.prefix,
+          title: m.prefix + ' Actions',
+          commands: []
+        };
+      }
+      groups[m.prefix].commands.push({
+        type: m.type,
+        function: m.function,
+        target: m.target,
+        value: m.value
+      });
+    });
+    state.mappingGroups = Object.values(groups);
+  } else {
+    state.mappingGroups = [];
+  }
+
   dom.inFadeDuration.value = settings.fadeDuration || 500;
   dom.inUse24Hr.checked = settings.use24Hr === true;
 
@@ -167,7 +194,7 @@ export function setupSettingsListeners() {
       use24Hr: dom.inUse24Hr.checked,
       audioBuses: selectedBuses,
       automationColumnName: dom.inAutomationColumn.value,
-      automationMappings: state.automationMappings,
+      mappingGroups: state.mappingGroups,
       fadeDuration: parseInt(dom.inFadeDuration.value) || 500
     };
     await window.api.saveSettings(settings);
@@ -193,29 +220,73 @@ export function setupSettingsListeners() {
   });
 
   dom.btnCloseMappings.addEventListener('click', () => dom.modalAutomationMappings.classList.remove('visible'));
-  dom.btnCancelMappings.addEventListener('click', () => dom.modalAutomationMappings.classList.remove('visible'));
+  dom.btnCloseMappingsFooter.addEventListener('click', () => dom.modalAutomationMappings.classList.remove('visible'));
 
-  dom.btnSaveMappings.addEventListener('click', async () => {
-    const rows = dom.mappingsTbody.querySelectorAll('tr');
-    const newMappings = [];
-    rows.forEach(row => {
-      const prefix = row.querySelector('.map-prefix').value.trim();
-      if (!prefix) return;
-      newMappings.push({
-        prefix: prefix,
+  dom.btnRunAutomationTest.addEventListener('click', async () => {
+    const code = dom.inAutomationTest.value.trim();
+    if (!code) {
+      showToast('Please enter an automation string to test.', 'warning');
+      return;
+    }
+    
+    dom.btnRunAutomationTest.disabled = true;
+    dom.btnRunAutomationTest.innerText = 'Running...';
+    try {
+      await testRawAutomation(code);
+      showToast('Test executed successfully!', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Error executing test', 'error');
+    } finally {
+      dom.btnRunAutomationTest.disabled = false;
+      dom.btnRunAutomationTest.innerText = '▶ Run Test';
+    }
+  });
+
+  dom.btnAddMappingGroup.addEventListener('click', () => {
+    openGroupEditModal({
+      id: 'group-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+      prefix: '',
+      title: '',
+      commands: []
+    }, true); 
+  });
+
+  dom.btnCloseGroup.addEventListener('click', () => dom.modalEditMappingGroup.classList.remove('visible'));
+  dom.btnCancelGroup.addEventListener('click', () => dom.modalEditMappingGroup.classList.remove('visible'));
+
+  dom.btnSaveGroup.addEventListener('click', async () => {
+    if (!state.currentlyEditingGroup) return;
+    
+    state.currentlyEditingGroup.prefix = dom.groupPrefixInput.value.trim();
+    state.currentlyEditingGroup.title = dom.groupTitleInput.value.trim();
+    
+    const cmdRows = dom.groupCommandsTbody.querySelectorAll('tr');
+    const newCmds = [];
+    cmdRows.forEach(row => {
+      newCmds.push({
         type: row.querySelector('.map-type').value,
         function: row.querySelector('.map-func').value.trim(),
         target: row.querySelector('.map-target').value.trim(),
         value: row.querySelector('.map-value') ? row.querySelector('.map-value').value.trim() : ''
       });
     });
-
-    state.automationMappings = newMappings;
-    dom.modalAutomationMappings.classList.remove('visible');
+    
+    state.currentlyEditingGroup.commands = newCmds;
+    
+    if (state.isNewGroup) {
+      state.mappingGroups.push(state.currentlyEditingGroup);
+    }
+    
+    const settings = { mappingGroups: state.mappingGroups };
+    await window.api.saveSettings(settings);
+    
+    dom.modalEditMappingGroup.classList.remove('visible');
+    renderMappingsTable();
   });
 
-  dom.btnAddMapping.addEventListener('click', () => {
-    addMappingRow({ prefix: '', type: 'Input', function: 'Cut', target: '', value: '' });
+  dom.btnAddGroupCommand.addEventListener('click', () => {
+    addGroupCommandRow({ type: 'Input', function: '', target: '', value: '' });
   });
 
   dom.btnScanDefaults.addEventListener('click', async () => {
@@ -228,42 +299,52 @@ export function setupSettingsListeners() {
 
 export function renderMappingsTable() {
   dom.mappingsTbody.innerHTML = '';
-  if (state.automationMappings.length === 0) {
-    addMappingRow({ prefix: 'C', type: 'Input', function: 'Cut', target: 'Camera 1', value: '' });
-    addMappingRow({ prefix: 'M', type: 'Mic', function: 'AudioOn', target: 'Anchor Mic', value: '' });
-    addMappingRow({ prefix: 'CG', type: 'Overlay', function: 'OverlayInput1In', target: 'LowerThird.gtzip', value: '' });
-    addMappingRow({ prefix: 'CGO', type: 'Overlay', function: 'OverlayInput1Out', target: 'LowerThird.gtzip', value: '' });
-    addMappingRow({ prefix: 'D', type: 'Transition', function: 'Fade', target: '', value: '' });
-  } else {
-    state.automationMappings.forEach(m => addMappingRow(m));
+  if (state.mappingGroups.length === 0) {
+    const defaults = [
+      { id: '1', prefix: 'C', title: 'Cut to Camera', commands: [{ type: 'Input', function: 'Cut', target: 'Camera 1', value: '' }] },
+      { id: '2', prefix: 'M', title: 'Anchor Mic Auto', commands: [{ type: 'Mic', function: 'AudioOn', target: 'Anchor Mic', value: '' }] },
+      { id: '3', prefix: 'CG', title: 'Lower Third In', commands: [{ type: 'Overlay', function: 'OverlayInput1In', target: 'LowerThird.gtzip', value: '' }] },
+      { id: '4', prefix: 'CGO', title: 'Lower Third Out', commands: [{ type: 'Overlay', function: 'OverlayInput1Out', target: 'LowerThird.gtzip', value: '' }] },
+      { id: '5', prefix: 'D', title: 'Fade Transition', commands: [{ type: 'Transition', function: 'Fade', target: '', value: '' }] }
+    ];
+    state.mappingGroups = defaults;
+    window.api.saveSettings({ mappingGroups: state.mappingGroups });
   }
+  
+  state.mappingGroups.forEach(group => addMappingGroupRow(group));
 }
 
-let draggedMappingRow = null;
+let draggedGroupRow = null;
 
-export function addMappingRow(mapping) {
+export function addMappingGroupRow(group) {
   const tr = document.createElement('tr');
   tr.draggable = false;
+  tr.dataset.groupId = group.id;
+  
+  const cmdSummary = group.commands.map(c => c.function || c.type).join(', ');
+  
   tr.innerHTML = `
     <td class="drag-handle" style="cursor: grab; color: var(--text-secondary); text-align: center; user-select: none;">☰</td>
-    <td><input type="text" class="map-prefix" value="${mapping.prefix || ''}" placeholder="e.g. C" style="width: 100%; box-sizing: border-box;"></td>
-    <td>
-      <select class="map-type" style="width: 100%; box-sizing: border-box;">
-        <option value="Input" ${mapping.type === 'Input' ? 'selected' : ''}>Input (Camera/Video)</option>
-        <option value="Macro" ${mapping.type === 'Macro' ? 'selected' : ''}>Macro (SOT/VO)</option>
-        <option value="Mic" ${mapping.type === 'Mic' ? 'selected' : ''}>Microphone</option>
-        <option value="Overlay" ${mapping.type === 'Overlay' ? 'selected' : ''}>Overlay (CG)</option>
-        <option value="Transition" ${mapping.type === 'Transition' ? 'selected' : ''}>Transition</option>
-        <option value="Destination" ${mapping.type === 'Destination' ? 'selected' : ''}>Destination (Monitor/Mix)</option>
-        <option value="Custom API" ${mapping.type === 'Custom API' ? 'selected' : ''}>Custom API</option>
-      </select>
+    <td><span class="badge" style="font-size: 0.9rem;">${group.prefix || '-'}</span></td>
+    <td style="font-weight: 500;">${group.title || 'Untitled Group'}</td>
+    <td style="color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px;" title="${cmdSummary}">
+      ${cmdSummary || 'No commands'}
     </td>
-    <td><input type="text" class="map-func" value="${mapping.function || ''}" placeholder="e.g. Cut" style="width: 100%; box-sizing: border-box;"></td>
-    <td><input type="text" class="map-target" value="${mapping.target || ''}" placeholder="e.g. Camera 1" style="width: 100%; box-sizing: border-box;"></td>
-    <td><input type="text" class="map-value" value="${mapping.value || ''}" placeholder="e.g. 1" style="width: 100%; box-sizing: border-box;"></td>
-    <td><button class="btn danger small btn-remove-mapping">&times;</button></td>
+    <td>
+      <button class="btn secondary small btn-edit-group" style="margin-right: 4px;">Edit</button>
+      <button class="btn danger small btn-remove-group">&times;</button>
+    </td>
   `;
-  tr.querySelector('.btn-remove-mapping').addEventListener('click', () => tr.remove());
+  
+  tr.querySelector('.btn-remove-group').addEventListener('click', async () => {
+    state.mappingGroups = state.mappingGroups.filter(g => g.id !== group.id);
+    tr.remove();
+    await window.api.saveSettings({ mappingGroups: state.mappingGroups });
+  });
+  
+  tr.querySelector('.btn-edit-group').addEventListener('click', () => {
+    openGroupEditModal(group, false);
+  });
 
   const dragHandle = tr.querySelector('.drag-handle');
   dragHandle.addEventListener('mousedown', () => { tr.draggable = true; });
@@ -271,7 +352,111 @@ export function addMappingRow(mapping) {
   dragHandle.addEventListener('mouseleave', () => { tr.draggable = false; });
 
   tr.addEventListener('dragstart', (e) => {
-    draggedMappingRow = tr;
+    draggedGroupRow = tr;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', tr.innerHTML);
+    tr.style.opacity = '0.5';
+  });
+
+  tr.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+  });
+
+  tr.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    tr.style.borderTop = '2px solid var(--accent-color)';
+  });
+
+  tr.addEventListener('dragleave', () => {
+    tr.style.borderTop = '';
+  });
+
+  tr.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tr.style.borderTop = '';
+    if (draggedGroupRow && draggedGroupRow !== tr) {
+      const tbody = tr.parentNode;
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+      const draggedIndex = rows.indexOf(draggedGroupRow);
+      const targetIndex = rows.indexOf(tr);
+      if (draggedIndex < targetIndex) {
+        tbody.insertBefore(draggedGroupRow, tr.nextSibling);
+      } else {
+        tbody.insertBefore(draggedGroupRow, tr);
+      }
+      
+      const newRows = Array.from(tbody.querySelectorAll('tr'));
+      const newGroups = newRows.map(row => state.mappingGroups.find(g => g.id === row.dataset.groupId));
+      state.mappingGroups = newGroups;
+      await window.api.saveSettings({ mappingGroups: state.mappingGroups });
+    }
+    return false;
+  });
+
+  tr.addEventListener('dragend', () => {
+    tr.draggable = false;
+    tr.style.opacity = '1';
+    document.querySelectorAll('#mappings-tbody tr').forEach(row => row.style.borderTop = '');
+    draggedGroupRow = null;
+  });
+
+  dom.mappingsTbody.appendChild(tr);
+}
+
+export function openGroupEditModal(group, isNew) {
+  state.currentlyEditingGroup = group;
+  state.isNewGroup = isNew;
+  
+  dom.modalGroupTitle.innerText = isNew ? "Add New Mapping Group" : "Edit Mapping Group";
+  dom.groupPrefixInput.value = group.prefix || '';
+  dom.groupTitleInput.value = group.title || '';
+  
+  dom.groupCommandsTbody.innerHTML = '';
+  if (group.commands && group.commands.length > 0) {
+    group.commands.forEach(cmd => addGroupCommandRow(cmd));
+  } else if (isNew) {
+    addGroupCommandRow({ type: 'Input', function: '', target: '', value: '' });
+  }
+  
+  dom.modalEditMappingGroup.classList.add('visible');
+}
+
+let draggedCommandRow = null;
+
+export function addGroupCommandRow(cmd) {
+  const tr = document.createElement('tr');
+  tr.draggable = false;
+  tr.innerHTML = `
+    <td class="drag-handle" style="cursor: grab; color: var(--text-secondary); text-align: center; user-select: none;">☰</td>
+    <td>
+      <select class="map-type" style="width: 100%; box-sizing: border-box;">
+        <option value="Input" ${cmd.type === 'Input' ? 'selected' : ''}>Input (Camera/Video)</option>
+        <option value="Macro" ${cmd.type === 'Macro' ? 'selected' : ''}>Macro (SOT/VO)</option>
+        <option value="Mic" ${cmd.type === 'Mic' ? 'selected' : ''}>Microphone</option>
+        <option value="Overlay" ${cmd.type === 'Overlay' ? 'selected' : ''}>Overlay (CG)</option>
+        <option value="Transition" ${cmd.type === 'Transition' ? 'selected' : ''}>Transition</option>
+        <option value="Destination" ${cmd.type === 'Destination' ? 'selected' : ''}>Destination (Monitor/Mix)</option>
+        <option value="Custom API" ${cmd.type === 'Custom API' ? 'selected' : ''}>Custom API</option>
+      </select>
+    </td>
+    <td><input type="text" class="map-func" value="${cmd.function || ''}" placeholder="e.g. Cut" style="width: 100%; box-sizing: border-box;"></td>
+    <td><input type="text" class="map-target" value="${cmd.target || ''}" placeholder="e.g. Camera 1" style="width: 100%; box-sizing: border-box;"></td>
+    <td><input type="text" class="map-value" value="${cmd.value || ''}" placeholder="e.g. 1" style="width: 100%; box-sizing: border-box;"></td>
+    <td><button class="btn danger small btn-remove-cmd">&times;</button></td>
+  `;
+  
+  tr.querySelector('.btn-remove-cmd').addEventListener('click', () => tr.remove());
+
+  const dragHandle = tr.querySelector('.drag-handle');
+  dragHandle.addEventListener('mousedown', () => { tr.draggable = true; });
+  dragHandle.addEventListener('mouseup', () => { tr.draggable = false; });
+  dragHandle.addEventListener('mouseleave', () => { tr.draggable = false; });
+
+  tr.addEventListener('dragstart', (e) => {
+    draggedCommandRow = tr;
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/html', tr.innerHTML);
     tr.style.opacity = '0.5';
@@ -296,15 +481,15 @@ export function addMappingRow(mapping) {
     e.preventDefault();
     e.stopPropagation();
     tr.style.borderTop = '';
-    if (draggedMappingRow && draggedMappingRow !== tr) {
+    if (draggedCommandRow && draggedCommandRow !== tr) {
       const tbody = tr.parentNode;
       const rows = Array.from(tbody.querySelectorAll('tr'));
-      const draggedIndex = rows.indexOf(draggedMappingRow);
+      const draggedIndex = rows.indexOf(draggedCommandRow);
       const targetIndex = rows.indexOf(tr);
       if (draggedIndex < targetIndex) {
-        tbody.insertBefore(draggedMappingRow, tr.nextSibling);
+        tbody.insertBefore(draggedCommandRow, tr.nextSibling);
       } else {
-        tbody.insertBefore(draggedMappingRow, tr);
+        tbody.insertBefore(draggedCommandRow, tr);
       }
     }
     return false;
@@ -313,9 +498,9 @@ export function addMappingRow(mapping) {
   tr.addEventListener('dragend', () => {
     tr.draggable = false;
     tr.style.opacity = '1';
-    document.querySelectorAll('#mappings-tbody tr').forEach(row => row.style.borderTop = '');
-    draggedMappingRow = null;
+    document.querySelectorAll('#group-commands-tbody tr').forEach(row => row.style.borderTop = '');
+    draggedCommandRow = null;
   });
 
-  dom.mappingsTbody.appendChild(tr);
+  dom.groupCommandsTbody.appendChild(tr);
 }

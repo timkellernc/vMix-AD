@@ -3,3 +3,11 @@ electron.zip
 /Legacy
 /dist
 renderer_old.js
+debug-log.txt
+
+# OS Generated
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env

@@ -12,14 +12,26 @@ export function initClock() {
     updateLiveTimers();
   }, 1000);
 }
+export function getBlockLetter(item) {
+  if (!item) return null;
+  const match = (item.page || '').match(/^[a-zA-Z]+/);
+  return match ? match[0].toUpperCase() : (item.segment || null);
+}
+
 export function getBlockFirstItemIndex(currentIndex) {
-  let firstIdx = 0;
+  if (currentIndex < 0 || currentIndex >= state.globalParsedItems.length) return 0;
+  
+  const currentBlock = getBlockLetter(state.globalParsedItems[currentIndex]);
+  
+  let firstIdx = currentIndex;
   for (let i = currentIndex; i >= 0; i--) {
-    if (state.globalParsedItems[i].isBreak) {
+    const item = state.globalParsedItems[i];
+    if (item.isBreak || (currentBlock !== null && getBlockLetter(item) !== currentBlock)) {
       if (i === currentIndex) return i;
       firstIdx = i + 1;
       break;
     }
+    firstIdx = i;
   }
   return firstIdx;
 }
@@ -149,9 +161,11 @@ export function updateLiveTimers() {
 
   const clampedRemaining = Math.max(0, remaining);
   let subsequentSum = 0;
+  const currentBlock = getBlockLetter(currentItem);
+  
   for (let i = targetIndex + 1; i < state.globalParsedItems.length; i++) {
     const nextItem = state.globalParsedItems[i];
-    if (nextItem.isBreak) break; 
+    if (nextItem.isBreak || (currentBlock !== null && getBlockLetter(nextItem) !== currentBlock)) break; 
     subsequentSum += (nextItem.estDuration || 0);
   }
 
@@ -178,6 +192,20 @@ export function updateLiveTimers() {
       timerOnOver.innerText = `${isOver ? '+' : '-'}${mm}:${ss}`;
       timerOnOver.style.color = isOver ? "var(--error)" : "var(--success)";
     }
+  }
+
+  let runningFrontTime = state.activeOnAirStartDate;
+  for (let i = targetIndex; i < state.globalParsedItems.length; i++) {
+    const item = state.globalParsedItems[i];
+    const rowEl = document.getElementById(`row-item-${i + 1}`);
+    if (rowEl) {
+      const frontEl = rowEl.querySelector('.row-front-time');
+      if (frontEl) {
+        const formatted = formatTimeOfDay(runningFrontTime);
+        if (frontEl.innerText !== formatted) frontEl.innerText = formatted;
+      }
+    }
+    runningFrontTime += (item.estDuration || 0);
   }
 }
 

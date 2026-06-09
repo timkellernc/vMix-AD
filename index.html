@@ -295,16 +295,16 @@
           `C1M1CG1` and execute the corresponding vMix commands.
         </p>
 
-        <table style="width: 100%; text-align: left; border-collapse: collapse; margin-bottom: 12px;">
+        <table
+          style="width: 100%; text-align: left; border-collapse: separate; border-spacing: 0 4px; margin-bottom: 12px;">
           <thead>
-            <tr style="border-bottom: 1px solid var(--panel-border);">
-              <th style="padding: 8px; width: 24px;"></th>
-              <th style="padding: 8px; width: 10%;">Prefix</th>
-              <th style="padding: 8px; width: 20%;">Type</th>
-              <th style="padding: 8px; width: 20%;">vMix Function</th>
-              <th style="padding: 8px; width: 35%;">Target Name/Input</th>
-              <th style="padding: 8px; width: 15%;">Value (e.g. Index)</th>
-              <th style="padding: 8px; width: 40px;"></th>
+            <tr>
+              <th style="padding: 8px; width: 24px; border-bottom: 1px solid var(--panel-border);"></th>
+              <th style="padding: 8px; width: 15%; border-bottom: 1px solid var(--panel-border);">Prefix</th>
+              <th style="padding: 8px; width: 30%; border-bottom: 1px solid var(--panel-border);">Title</th>
+              <th style="padding: 8px; width: 40%; border-bottom: 1px solid var(--panel-border);">Commands Summary</th>
+              <th style="padding: 8px; width: 15%; border-bottom: 1px solid var(--panel-border);">Actions</th>
+              <th style="padding: 8px; width: 40px; border-bottom: 1px solid var(--panel-border);"></th>
             </tr>
           </thead>
           <tbody id="mappings-tbody">
@@ -312,11 +312,59 @@
           </tbody>
         </table>
 
-        <button id="btn-add-mapping" class="btn secondary small">+ Add New Mapping</button>
+        <button id="btn-add-mapping-group" class="btn secondary small">+ Add New Group</button>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px; align-items: center;">
+        <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+          <input type="text" id="in-automation-test" placeholder="Type automation string (e.g. C1M1CG1)..." style="flex: 1; max-width: 300px;">
+          <button id="btn-run-automation-test" class="btn primary small">▶ Run Test</button>
+        </div>
+        <button id="btn-close-mappings-footer" class="btn secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-edit-mapping-group" class="modal hidden" style="z-index: 1600;">
+    <div class="modal-content" style="width: 1000px; max-height: 80vh;">
+      <div class="modal-header">
+        <h2 id="modal-group-title">Edit Mapping Group</h2>
+        <button id="btn-close-group" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 16px; overflow-y: auto;">
+        <div style="display: flex; gap: 16px; margin-bottom: 16px;">
+          <label style="flex: 1;">
+            Prefix:
+            <input type="text" id="group-prefix-input" placeholder="e.g. C">
+          </label>
+          <label style="flex: 2;">
+            Title (Description):
+            <input type="text" id="group-title-input" placeholder="e.g. Cut to Camera">
+          </label>
+        </div>
+
+        <table
+          style="width: 100%; text-align: left; border-collapse: separate; border-spacing: 0 4px; margin-bottom: 12px;">
+          <thead>
+            <tr>
+              <th style="padding: 8px; width: 24px; border-bottom: 1px solid var(--panel-border);"></th>
+              <th style="padding: 8px; width: 20%; border-bottom: 1px solid var(--panel-border);">Type</th>
+              <th style="padding: 8px; width: 25%; border-bottom: 1px solid var(--panel-border);">vMix Function</th>
+              <th style="padding: 8px; width: 40%; border-bottom: 1px solid var(--panel-border);">Target Name/Input</th>
+              <th style="padding: 8px; width: 15%; border-bottom: 1px solid var(--panel-border);">Value (e.g. Index)
+              </th>
+              <th style="padding: 8px; width: 40px; border-bottom: 1px solid var(--panel-border);"></th>
+            </tr>
+          </thead>
+          <tbody id="group-commands-tbody">
+            <!-- Dynamic rows inserted here -->
+          </tbody>
+        </table>
+
+        <button id="btn-add-group-command" class="btn secondary small">+ Add Command</button>
       </div>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px;">
-        <button id="btn-cancel-mappings" class="btn secondary">Cancel</button>
-        <button id="btn-save-mappings" class="btn primary">Save Mappings</button>
+        <button id="btn-cancel-group" class="btn secondary">Cancel</button>
+        <button id="btn-save-group" class="btn primary">Save Group</button>
       </div>
     </div>
   </div>

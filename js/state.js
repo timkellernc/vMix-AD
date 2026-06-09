@@ -1,5 +1,14 @@
 export const state = {
-  automationMappings: [],
+  mappingGroups: [],
+  get automationMappings() {
+    return this.mappingGroups.flatMap(group => 
+      group.commands.map(cmd => ({
+        prefix: group.prefix,
+        title: group.title,
+        ...cmd
+      }))
+    );
+  },
   draggedMappingRow: null,
   globalParsedItems: [],
   vmixActionQueue: Promise.resolve(),
@@ -56,10 +65,22 @@ export const dom = {
   modalAutomationMappings: document.getElementById('modal-automation-mappings'),
   btnOpenMappings: document.getElementById('btn-open-mappings'),
   btnCloseMappings: document.getElementById('btn-close-mappings'),
-  btnCancelMappings: document.getElementById('btn-cancel-mappings'),
-  btnSaveMappings: document.getElementById('btn-save-mappings'),
-  btnAddMapping: document.getElementById('btn-add-mapping'),
+  btnCloseMappingsFooter: document.getElementById('btn-close-mappings-footer'),
+  btnAddMappingGroup: document.getElementById('btn-add-mapping-group'),
   mappingsTbody: document.getElementById('mappings-tbody'),
+  inAutomationTest: document.getElementById('in-automation-test'),
+  btnRunAutomationTest: document.getElementById('btn-run-automation-test'),
+  
+  modalEditMappingGroup: document.getElementById('modal-edit-mapping-group'),
+  btnCloseGroup: document.getElementById('btn-close-group'),
+  btnCancelGroup: document.getElementById('btn-cancel-group'),
+  btnSaveGroup: document.getElementById('btn-save-group'),
+  btnAddGroupCommand: document.getElementById('btn-add-group-command'),
+  groupCommandsTbody: document.getElementById('group-commands-tbody'),
+  groupPrefixInput: document.getElementById('group-prefix-input'),
+  groupTitleInput: document.getElementById('group-title-input'),
+  modalGroupTitle: document.getElementById('modal-group-title'),
+
   scanResult: document.getElementById('scan-result'),
   
   inIp: document.getElementById('setting-ip'),
