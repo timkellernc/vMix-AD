@@ -11,7 +11,7 @@ const store = new Store({
     vmixIP: '127.0.0.1:8088',
     showDirectory: '',
     defaultsDirectory: '',
-    automationColumnName: 'Switcher',
+    automationColumnName: 'Coding',
     automationMappings: []
   }
 });

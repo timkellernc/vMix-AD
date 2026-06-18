@@ -34,21 +34,39 @@ export async function getVmixActiveSlotTitles() {
 
 export async function resolveMixIndex(target) {
   if (target === null || target === undefined || target === '') return '';
-  if (!isNaN(target)) return parseInt(target, 10);
+  if (String(target).toLowerCase() === 'main') return 0;
+  
   try {
     const res = await window.api.vmixRequest('');
     if (!res.success) return '';
     const parser = new DOMParser();
     const doc = parser.parseFromString(res.data, "text/xml");
-    const mixInputs = Array.from(doc.querySelectorAll('input[type="Mix"]'));
-    const matchedIndex = mixInputs.findIndex(i => i.getAttribute('title') === target || i.getAttribute('shortTitle') === target);
-    if (matchedIndex !== -1) {
-      return matchedIndex + 1;
+    
+    let mixIndex = null;
+    if (!isNaN(target)) {
+      mixIndex = parseInt(target, 10);
+    } else {
+      const mixInputs = Array.from(doc.querySelectorAll('input[type="Mix"]'));
+      const matchedIndex = mixInputs.findIndex(i => i.getAttribute('title') === target || i.getAttribute('shortTitle') === target);
+      if (matchedIndex !== -1) {
+        mixIndex = matchedIndex + 1;
+      }
+    }
+    
+    if (mixIndex !== null) {
+      if (mixIndex === 0) return 0; // Main Mix
+      
+      const mixExists = doc.querySelector(`mix[number="${mixIndex + 1}"]`);
+      if (mixExists) {
+        return mixIndex;
+      } else {
+        return null;
+      }
     }
   } catch (err) {
     console.error("Failed to resolve mix index:", err);
   }
-  return '';
+  return null;
 }
 
 export async function getSafeSlot(desiredSlot) {
@@ -253,7 +271,7 @@ export async function processReadAheadQueue() {
 
   for (let i = currentIndex; i < state.globalParsedItems.length && lookAheadCount < maxLookAhead; i++) {
     const item = state.globalParsedItems[i];
-    if (item && item.files && item.files.length > 0) {
+    if (item && item.files && item.files.length > 0 && !item.isFloated) {
       let hasValidVideo = false;
 
       for (let fIdx = 0; fIdx < item.files.length; fIdx++) {

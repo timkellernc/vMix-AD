@@ -1,7 +1,7 @@
 export const state = {
   mappingGroups: [],
   get automationMappings() {
-    return this.mappingGroups.flatMap(group => 
+    return this.mappingGroups.flatMap(group =>
       group.commands.map(cmd => ({
         prefix: group.prefix,
         title: group.title,
@@ -14,33 +14,33 @@ export const state = {
   vmixActionQueue: Promise.resolve(),
   globalSlotMap: {},
   activeRundownId: null,
-  
+
   timerPollTimeout: null,
-  currentAutomationColumnName: 'Switcher',
+  currentAutomationColumnName: 'Coding',
   activeOnAirRowId: null,
   activeOnAirStartDate: null,
   activeOnAirCmdIndex: -1,
   flushAutomation: false,
   activeAutomationAbortController: null,
   activeAutomationPromise: null,
-  
+
   previewTimeout: null,
   lastPreviewCursorRow: -1,
   lastPreviewCursorCmd: -1,
-  
+
   activeRundownStartTime: null,
   activeRundownEndTime: null,
   serverTimeOffsetMs: 0,
   timerIgnoreApiUpdatesUntil: 0,
-  
+
   blockEarliestRowData: {},
   autoRefreshInterval: null,
   lastRundownSignature: null,
   recentRundownSignatures: new Set(),
   lastLocalUpdate: 0,
-  
+
   activeScriptItem: null,
-  
+
   imageExts: ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp', 'webp', 'heif'],
   audioExts: ['mp3', 'wav'],
   titleExts: ['gt', 'xaml']
@@ -58,13 +58,13 @@ export const dom = {
   btnCloseRundowns: document.getElementById('btn-close-rundowns'),
   btnLoadRundown: document.getElementById('btn-load-rundown'),
   selectRundown: document.getElementById('select-rundown'),
-  
+
   modalSettings: document.getElementById('settings-modal'),
   btnOpenSettings: document.getElementById('btn-settings'),
   btnCloseSettings: document.getElementById('btn-close-settings'),
   btnSaveSettings: document.getElementById('btn-save-settings'),
   btnCancelSettings: document.getElementById('btn-cancel-settings'),
-  
+
   modalAutomationMappings: document.getElementById('modal-automation-mappings'),
   btnOpenMappings: document.getElementById('btn-open-mappings'),
   btnCloseMappings: document.getElementById('btn-close-mappings'),
@@ -73,7 +73,7 @@ export const dom = {
   mappingsTbody: document.getElementById('mappings-tbody'),
   inAutomationTest: document.getElementById('in-automation-test'),
   btnRunAutomationTest: document.getElementById('btn-run-automation-test'),
-  
+
   modalEditMappingGroup: document.getElementById('modal-edit-mapping-group'),
   btnCloseGroup: document.getElementById('btn-close-group'),
   btnCancelGroup: document.getElementById('btn-cancel-group'),
@@ -85,7 +85,7 @@ export const dom = {
   modalGroupTitle: document.getElementById('modal-group-title'),
 
   scanResult: document.getElementById('scan-result'),
-  
+
   inIp: document.getElementById('setting-ip'),
   inPort: document.getElementById('setting-port'),
   inStation: document.getElementById('setting-station'),
@@ -101,11 +101,11 @@ export const dom = {
   inProtectProgram: document.getElementById('setting-protect-program'),
   inUse24Hr: document.getElementById('setting-use-24hr'),
   inFadeDuration: document.getElementById('setting-fade-duration'),
-  
+
   btnScanDefaults: document.getElementById('btn-scan-defaults'),
   btnSelectShowdir: document.getElementById('btn-select-showdir'),
   btnSelectDefaultsdir: document.getElementById('btn-select-defaultsdir'),
-  
+
   modalScript: document.getElementById('modal-script'),
   modalScriptTitle: document.getElementById('modal-script-title'),
   modalScriptContent: document.getElementById('modal-script-content'),
@@ -114,19 +114,19 @@ export const dom = {
   btnSaveScript: document.getElementById('btn-save-script'),
   btnCancelScript: document.getElementById('btn-cancel-script'),
   btnCapsScript: document.getElementById('btn-caps-script'),
-  
+
   modalConfirm: document.getElementById('modal-confirm'),
   btnConfirmCancel: document.getElementById('btn-confirm-cancel'),
   btnConfirmOk: document.getElementById('btn-confirm-ok'),
   modalConfirmMsg: document.getElementById('modal-confirm-msg'),
-  
+
   btnLoadCsv: document.getElementById('btn-load-csv'),
   btnInit: document.getElementById('btn-init'),
   btnLoadBlock: document.getElementById('btn-load-block'),
   btnLoadElement: document.getElementById('btn-load-element'),
-  
+
   inCurrentIndex: document.getElementById('current-index-input'),
-  
+
   contextMenu: document.getElementById('context-menu'),
   menuAddElementAbove: document.getElementById('menu-add-element-above'),
   menuAddElementBelow: document.getElementById('menu-add-element-below'),

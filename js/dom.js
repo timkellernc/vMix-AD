@@ -1,7 +1,7 @@
 import { state, dom } from './state.js';
 import { getExt, formatDuration, parseDuration, formatTimeOfDay, showToast } from './utils.js';
 import { enqueueVmixAction, sendToVmix, getSafeSlot } from './media.js';
-import { executeTake, parseAutomationCode, syncAutomationUI } from './automation.js';
+import { executeTake, parseAutomationCode, syncAutomationUI, generateAutomationTooltip, calculateStartingVideoIndex } from './automation.js';
 import { optimisticUpdateTimerUI, pollOnAirTimer } from './timers.js';
 import { refreshSignatureQuietly } from './api.js';
 
@@ -54,6 +54,7 @@ export function appendRowItem(item, insertBeforeNode = null) {
     newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.resolvedPath}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
   if (item.isCustom) newFilesSig += '||CUSTOM';
+  newFilesSig += `||${!!item.isFloated}`;
   row.dataset.filesSig = newFilesSig;
 
   if (item.isFloated) row.classList.add('floated');
@@ -63,16 +64,13 @@ export function appendRowItem(item, insertBeforeNode = null) {
   if (String(item.rowId) === String(state.activeOnAirRowId)) row.classList.add('on-air');
 
   row.innerHTML = `
-    <div class="row-index">${itemCount}</div>
-    <div class="row-page">${item.page || ''}</div>
-    <div class="row-title" title="${item.slug} ${item.segment || ''}">${item.slug} ${item.segment || ''}</div>
-    <div class="row-auto-container" style="width: 140px; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; padding: 0 8px;">
-      ${buildAutoHtml(item)}
-    </div>
-    <div class="row-files-container" style="flex: 4; display: flex; flex-direction: column; min-width: 0;">
-      ${buildFilesHtml(item)}
-    </div>
-    <div class="row-actions">
+      <div class="row-index">${itemCount}</div>
+      <div class="row-page">${item.page || ''}</div>
+      <div class="row-title" title="${item.slug} ${item.segment || ''}">${item.slug} ${item.segment || ''}</div>
+      <div class="row-combined-container" style="flex-grow: 4; flex-basis: 140px; display: grid; grid-template-columns: 140px 1fr; min-width: 0;">
+        ${buildCombinedHtml(item)}
+      </div>
+      <div class="row-actions">
       <input type="text" class="row-est-duration" value="${formatDuration(item.estDuration)}" title="Est. Duration (click to edit)" />
       <div class="row-front-time" style="width: 95px; text-align: center; color: var(--text-secondary); font-family: monospace; font-size: 0.875rem;">${formatTimeOfDay(item.frontTime)}</div>
       <div class="row-back-time" style="width: 95px; text-align: center; color: var(--text-secondary); font-family: monospace; font-size: 0.875rem;">${formatTimeOfDay(item.backTime)}</div>
@@ -254,79 +252,150 @@ export function appendRowItem(item, insertBeforeNode = null) {
   return row;
 }
 
-export function buildAutoHtml(item) {
-  if (!item.automationCode) return '';
-  const autoCommands = item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0);
-  let html = '';
-  autoCommands.forEach(cmd => {
-    const escapedCmd = cmd.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    html += `<button class="btn small btn-run-auto" data-auto-cmd="${escapedCmd}" style="margin: 2px;">${escapedCmd}</button>`;
-  });
-  return html;
-}
+export function generateFileItemHtml(item, index) {
+  if (item.files && index < item.files.length) {
+    const file = item.files[index];
+    let fallbackHtml = '';
+    if (file.isFallback) fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
 
-export function buildFilesHtml(item) {
-  let filesHtml = '';
+    const displayFile = file.originalFile;
+    const resolvedPath = file.resolvedPath;
 
-  if (item.files && item.files.length > 0) {
-    item.files.forEach((file, index) => {
-      let fallbackHtml = '';
-      if (file.isFallback) fallbackHtml = '<span class="row-fallback-badge">Fallback</span>';
+    let fileClass = 'row-file';
+    if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
 
-      const displayFile = file.originalFile;
-      const resolvedPath = file.resolvedPath;
+    let btnText = 'Load';
+    let btnClass = 'primary';
+    if (file.isPlaceholderLoaded) {
+      btnText = 'Searching...';
+      btnClass = 'success';
+    } else if (file.isLoaded) {
+      btnText = file.loadedSlot ? `Loaded [${file.loadedSlot}]` : 'Loaded';
+      btnClass = 'success';
+    }
 
-      let fileClass = 'row-file';
-      if (file.originalFile && !file.resolvedPath) fileClass += ' missing-file';
-
-      let btnText = 'Load';
-      let btnClass = 'primary';
-      if (file.isPlaceholderLoaded) {
-        btnText = 'Searching...';
-        btnClass = 'success';
-      } else if (file.isLoaded) {
-        btnText = file.loadedSlot ? `Loaded [${file.loadedSlot}]` : 'Loaded';
-        btnClass = 'success';
-      }
-
-      let fileContent = '';
-      if (file.isCustom) {
-        const prefill = file.requestedFile || file.originalFile || '';
-        fileContent = `<input type="text" class="custom-source-input" data-file-index="${index}" placeholder="Type filename..." value="${prefill}" style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
-      } else {
-        fileContent = `${displayFile || ''} <span class="row-duration"></span> ${fallbackHtml}`;
-      }
-
-      filesHtml += `
-        <div class="file-entry" data-file-index="${index}" style="display: flex; align-items: center; padding: 4px 0;">
-          <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px; min-width: 0;">
-            ${fileContent}
-          </div>
-          <button class="btn ${btnClass} small btn-run btn-run-file" data-file-index="${index}">${btnText}</button>
-        </div>
-      `;
-    });
-  } else {
-    if (item.isCustom) {
-      filesHtml += `
-        <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
-          <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4; min-width: 0;">
-            <input type="text" class="custom-source-input" data-file-index="0" placeholder="Type filename..." style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />
-          </div>
-          <button class="btn primary small btn-run btn-run-file" data-file-index="0">LOAD</button>
-        </div>
-      `;
+    let fileContent = '';
+    if (file.isCustom) {
+      const prefill = file.requestedFile || file.originalFile || '';
+      fileContent = `<input type="text" class="custom-source-input" data-file-index="${index}" placeholder="Type filename..." value="${prefill}" style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" />`;
     } else {
-      filesHtml += `
-        <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; padding: 4px 0;">
-          <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4;">
+      fileContent = `${displayFile || ''} <span class="row-duration"></span> ${fallbackHtml}`;
+    }
+
+    const disabledAttr = item.isFloated ? 'disabled style="opacity: 0.5;"' : '';
+    
+    return `
+      <div class="file-entry" data-file-index="${index}" style="display: flex; align-items: center; min-height: 22px;">
+        <div class="${fileClass}" title="${resolvedPath || ''}" style="flex: 1; margin-right: 12px; min-width: 0; line-height: 1.2;">
+          ${fileContent}
+        </div>
+        <button class="btn ${btnClass} small btn-run btn-run-file" data-file-index="${index}" style="margin: 0; padding: 1px 6px; min-height: 22px;" ${disabledAttr}>${btnText}</button>
+      </div>
+    `;
+  } else {
+    if (item.isCustom && index === 0) {
+      const disabledAttr = item.isFloated ? 'disabled style="opacity: 0.5;"' : '';
+      return `
+        <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; min-height: 22px;">
+          <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4; min-width: 0; line-height: 1.2;">
+            <input type="text" class="custom-source-input" data-file-index="0" placeholder="Type filename..." style="width: 100%; background: transparent; color: white; border: none; outline: none; border-bottom: 1px solid var(--accent); font-family: monospace;" ${item.isFloated ? 'disabled' : ''}/>
+          </div>
+          <button class="btn primary small btn-run btn-run-file" data-file-index="0" style="margin: 0; padding: 1px 6px; min-height: 22px;" ${disabledAttr}>LOAD</button>
+        </div>
+      `;
+    } else if (index === 0 && (!item.files || item.files.length === 0)) {
+      return `
+        <div class="file-entry" data-file-index="0" style="display: flex; align-items: center; min-height: 24px;">
+          <div class="row-file" style="flex: 1; margin-right: 12px; opacity: 0.4; line-height: 1.2;">
             <span class="row-duration"></span>
           </div>
         </div>
       `;
     }
+    return '';
   }
-  return filesHtml;
+}
+
+export function buildCombinedHtml(item) {
+  const autoCommands = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
+  let rowsHtml = '';
+
+  const totalCmds = autoCommands.length;
+  let cmdIdx = 0;
+  let fileIdx = 0;
+  const totalFiles = (item.files && item.files.length) || (item.isCustom ? 1 : 0);
+
+  if (totalCmds === 0 && totalFiles === 0) {
+    return `
+      <div style="display: contents;">
+        <div class="grid-cell-auto" style="display: flex; align-items: center; justify-content: center; padding: 2px 8px; border-right: 1px solid var(--panel-border);"></div>
+        <div class="grid-cell-file" style="display: flex; flex-direction: column; justify-content: center; padding: 2px 0 2px 8px; min-width: 0;">
+          ${generateFileItemHtml(item, 0)}
+        </div>
+      </div>
+    `;
+  }
+
+  while (cmdIdx < totalCmds || fileIdx < totalFiles) {
+    let hasCmd = cmdIdx < totalCmds;
+    let cmdHtml = '';
+    let cmdConsumesFiles = 0;
+
+    if (hasCmd) {
+      const cmd = autoCommands[cmdIdx];
+      const escapedCmd = cmd.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const parsedTokensArray = parseAutomationCode(cmd);
+      const tooltipText = generateAutomationTooltip(cmd, parsedTokensArray).replace(/"/g, '&quot;');
+
+      const disabledAttr = item.isFloated ? 'disabled style="opacity: 0.5;"' : '';
+      cmdHtml = `<button class="btn small btn-run-auto" data-auto-cmd="${escapedCmd}" title="${tooltipText}" style="margin: 0; padding: 2px 6px; min-height: 24px; width: 100%; box-sizing: border-box;" ${disabledAttr}>${escapedCmd}</button>`;
+
+      for (const tokens of parsedTokensArray) {
+        let currentDestination = false;
+        for (const t of tokens) {
+          if (t.type === 'Destination') {
+            currentDestination = true;
+          } else if (t.type === 'Macro' && (t.function === 'SOT' || t.function === 'VO')) {
+            cmdConsumesFiles++;
+            currentDestination = false;
+          } else if (t.type === 'Input' || t.type === 'Overlay') {
+            currentDestination = false;
+          }
+        }
+        if (currentDestination) {
+          cmdConsumesFiles++;
+        }
+      }
+    }
+
+    let fileHtml = '';
+    if (cmdConsumesFiles > 0) {
+      for (let i = 0; i < cmdConsumesFiles; i++) {
+        if (fileIdx < totalFiles) {
+          fileHtml += generateFileItemHtml(item, fileIdx);
+          fileIdx++;
+        }
+      }
+    } else if (!hasCmd) {
+      fileHtml += generateFileItemHtml(item, fileIdx);
+      fileIdx++;
+    }
+
+    rowsHtml += `
+      <div style="display: contents;">
+        <div class="grid-cell-auto" style="display: flex; align-items: center; justify-content: center; padding: 1px 8px; border-right: 1px solid var(--panel-border);">
+          ${cmdHtml}
+        </div>
+        <div class="grid-cell-file" style="display: flex; flex-direction: column; justify-content: center; padding: 1px 0 1px 8px; gap: 2px; min-width: 0;">
+          ${fileHtml}
+        </div>
+      </div>
+    `;
+
+    if (hasCmd) cmdIdx++;
+  }
+
+  return rowsHtml;
 }
 
 export function syncFileVisualState(item, fileIndex) {
@@ -394,13 +463,16 @@ export function attachFilesEventListeners(item, row) {
           }
           try {
             await state.activeAutomationPromise;
-          } catch(e) {}
+          } catch (e) { }
         }
         state.flushAutomation = false;
 
-        const promise = executeTake(item, parsedTokens, row);
+        const cmds = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
+        const startingVideoIndex = calculateStartingVideoIndex(cmds, index);
+
+        const promise = executeTake(item, parsedTokens, row, startingVideoIndex);
         state.activeAutomationPromise = promise;
-        
+
         promise.finally(() => {
           if (state.activeAutomationPromise === promise) {
             state.activeAutomationPromise = null;
@@ -622,13 +694,12 @@ export function updateRowItem(item, row, newIndex) {
     newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.resolvedPath}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
   if (item.isCustom) newFilesSig += '||CUSTOM';
+  newFilesSig += `||${!!item.isFloated}`;
 
   if (row.dataset.filesSig !== newFilesSig) {
-    const filesContainer = row.querySelector('.row-files-container');
-    if (filesContainer) {
-      filesContainer.innerHTML = buildFilesHtml(item);
-      const autoContainer = row.querySelector('.row-auto-container');
-      if (autoContainer) autoContainer.innerHTML = buildAutoHtml(item);
+    const combinedContainer = row.querySelector('.row-combined-container');
+    if (combinedContainer) {
+      combinedContainer.innerHTML = buildCombinedHtml(item);
       attachFilesEventListeners(item, row);
       row.dataset.filesSig = newFilesSig;
 

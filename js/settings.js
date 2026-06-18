@@ -17,7 +17,7 @@ export async function init(isStartup = false) {
   dom.inPoolSize.value = settings.poolSize || 15;
   dom.inProtectProgram.checked = settings.protectProgram !== false;
   dom.inUse24Hr.checked = settings.use24Hr === true;
-  state.currentAutomationColumnName = settings.automationColumnName || 'Switcher';
+  state.currentAutomationColumnName = settings.automationColumnName || 'Coding';
   dom.inAutomationColumn.value = state.currentAutomationColumnName;
 
   if (settings.mappingGroups) {
@@ -236,7 +236,7 @@ export function setupSettingsListeners() {
       showToast('Please enter an automation string to test.', 'warning');
       return;
     }
-    
+
     dom.btnRunAutomationTest.disabled = true;
     dom.btnRunAutomationTest.innerText = 'Running...';
     try {
@@ -257,7 +257,7 @@ export function setupSettingsListeners() {
       prefix: '',
       title: '',
       commands: []
-    }, true); 
+    }, true);
   });
 
   dom.btnCloseGroup.addEventListener('click', () => dom.modalEditMappingGroup.classList.remove('visible'));
@@ -265,10 +265,10 @@ export function setupSettingsListeners() {
 
   dom.btnSaveGroup.addEventListener('click', async () => {
     if (!state.currentlyEditingGroup) return;
-    
+
     state.currentlyEditingGroup.prefix = dom.groupPrefixInput.value.trim();
     state.currentlyEditingGroup.title = dom.groupTitleInput.value.trim();
-    
+
     const cmdRows = dom.groupCommandsTbody.querySelectorAll('tr');
     const newCmds = [];
     cmdRows.forEach(row => {
@@ -279,16 +279,16 @@ export function setupSettingsListeners() {
         value: row.querySelector('.map-value') ? row.querySelector('.map-value').value.trim() : ''
       });
     });
-    
+
     state.currentlyEditingGroup.commands = newCmds;
-    
+
     if (state.isNewGroup) {
       state.mappingGroups.push(state.currentlyEditingGroup);
     }
-    
+
     const settings = { mappingGroups: state.mappingGroups };
     await window.api.saveSettings(settings);
-    
+
     dom.modalEditMappingGroup.classList.remove('visible');
     renderMappingsTable();
   });
@@ -318,7 +318,7 @@ export function renderMappingsTable() {
     state.mappingGroups = defaults;
     window.api.saveSettings({ mappingGroups: state.mappingGroups });
   }
-  
+
   state.mappingGroups.forEach(group => addMappingGroupRow(group));
 }
 
@@ -328,9 +328,9 @@ export function addMappingGroupRow(group) {
   const tr = document.createElement('tr');
   tr.draggable = false;
   tr.dataset.groupId = group.id;
-  
+
   const cmdSummary = group.commands.map(c => c.function || c.type).join(', ');
-  
+
   tr.innerHTML = `
     <td class="drag-handle" style="cursor: grab; color: var(--text-secondary); text-align: center; user-select: none;">☰</td>
     <td><span class="badge" style="font-size: 0.9rem;">${group.prefix || '-'}</span></td>
@@ -343,13 +343,13 @@ export function addMappingGroupRow(group) {
       <button class="btn danger small btn-remove-group">&times;</button>
     </td>
   `;
-  
+
   tr.querySelector('.btn-remove-group').addEventListener('click', async () => {
     state.mappingGroups = state.mappingGroups.filter(g => g.id !== group.id);
     tr.remove();
     await window.api.saveSettings({ mappingGroups: state.mappingGroups });
   });
-  
+
   tr.querySelector('.btn-edit-group').addEventListener('click', () => {
     openGroupEditModal(group, false);
   });
@@ -395,7 +395,7 @@ export function addMappingGroupRow(group) {
       } else {
         tbody.insertBefore(draggedGroupRow, tr);
       }
-      
+
       const newRows = Array.from(tbody.querySelectorAll('tr'));
       const newGroups = newRows.map(row => state.mappingGroups.find(g => g.id === row.dataset.groupId));
       state.mappingGroups = newGroups;
@@ -417,18 +417,18 @@ export function addMappingGroupRow(group) {
 export function openGroupEditModal(group, isNew) {
   state.currentlyEditingGroup = group;
   state.isNewGroup = isNew;
-  
+
   dom.modalGroupTitle.innerText = isNew ? "Add New Mapping Group" : "Edit Mapping Group";
   dom.groupPrefixInput.value = group.prefix || '';
   dom.groupTitleInput.value = group.title || '';
-  
+
   dom.groupCommandsTbody.innerHTML = '';
   if (group.commands && group.commands.length > 0) {
     group.commands.forEach(cmd => addGroupCommandRow(cmd));
   } else if (isNew) {
     addGroupCommandRow({ type: 'Input', function: '', target: '', value: '' });
   }
-  
+
   dom.modalEditMappingGroup.classList.add('visible');
 }
 
@@ -458,7 +458,7 @@ export function addGroupCommandRow(cmd) {
     <td><input type="text" class="map-value" value="${cmd.value || ''}" placeholder="e.g. 1" style="width: 100%; box-sizing: border-box;"></td>
     <td><button class="btn danger small btn-remove-cmd">&times;</button></td>
   `;
-  
+
   tr.querySelector('.btn-remove-cmd').addEventListener('click', () => tr.remove());
 
   const dragHandle = tr.querySelector('.drag-handle');

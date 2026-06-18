@@ -44,11 +44,11 @@ export function startAutoRefreshPolling() {
               state.lastRundownSignature = newSig;
               state.recentRundownSignatures.add(newSig);
             } else {
-              dom.btnRefreshRundown.classList.add('flash-glow');
+              dom.btnRefreshRundown.classList.add('pulse-refresh');
             }
           }
         } else {
-          dom.btnRefreshRundown.classList.remove('flash-glow');
+          dom.btnRefreshRundown.classList.remove('pulse-refresh');
         }
       }
     } catch (e) {
@@ -69,7 +69,7 @@ export async function refreshSignatureQuietly() {
         const iterator = state.recentRundownSignatures.values();
         state.recentRundownSignatures.delete(iterator.next().value);
       }
-      dom.btnRefreshRundown.classList.remove('flash-glow');
+      dom.btnRefreshRundown.classList.remove('pulse-refresh');
     }
   } catch (e) {
     console.error("Quiet signature refresh failed", e);
@@ -82,11 +82,11 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
   dom.activeRundownTitle.innerText = rundownTitle ? `Loading... (${rundownTitle})` : "Loading...";
   state.lastRundownSignature = null;
   state.recentRundownSignatures.clear();
-  dom.btnRefreshRundown.classList.remove('flash-glow');
+  dom.btnRefreshRundown.classList.remove('pulse-refresh');
 
   let res = await window.api.rundownRequest('getRows', { RundownID: rundownId });
   dom.btnRefreshRundown.disabled = false;
-  
+
   if (!res.success) {
     dom.rundownList.innerHTML = `<div class="empty-state"><p>Error loading rundown: ${res.error}</p></div>`;
     dom.activeRundownTitle.innerText = rundownTitle ? `${rundownTitle} (Error)` : "Error";
@@ -146,29 +146,29 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
         }
       }
     }
-    
+
     if (cols.success && cols.data) {
-      const targetCol = cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === 'source') || 
-                        cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === 'file') || 
-                        cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === 'video');
+      const targetCol = cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === 'source') ||
+        cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === 'file') ||
+        cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === 'video');
       if (targetCol) state.sourceColId = targetCol.ColumnID;
 
-      const userAutoName = (state.currentAutomationColumnName || dom.inAutomationColumn.value || 'Switcher').toLowerCase();
+      const userAutoName = (state.currentAutomationColumnName || dom.inAutomationColumn.value || 'Coding').toLowerCase();
       const targetAutoCol = cols.data.find(c => (c.Name_Remapped || '').toLowerCase() === userAutoName || (c.Name || '').toLowerCase() === userAutoName);
       if (targetAutoCol) state.autoColId = targetAutoCol.ColumnID;
     }
-  } catch(e) {
+  } catch (e) {
     console.error("Failed to fetch rundown metadata/columns", e);
   }
 
   state.activeRundownStartTime = rdMetaStartTime;
   state.activeRundownEndTime = rdMetaEndTime;
-  
+
   let currentStartTime = state.activeRundownStartTime;
-  
+
   const newParsedItems = await Promise.all(res.data.map(async (r, i) => {
     let autoCode = getAutoCodeField(r);
-    
+
     let front = currentStartTime;
     if (currentStartTime) {
       currentStartTime += (r.EstimatedDuration || r.Duration || 0);
@@ -190,12 +190,12 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
       if (i === 0) {
         window.DEBUG_ROW_DATA = JSON.stringify(r);
       }
-      
+
       for (const t of filePaths) {
         let resolvedPath = null;
         let originalFile = t;
         let isFallback = false;
-        
+
         try {
           const mediaInfo = await window.api.resolveMedia(t);
           if (mediaInfo) {
@@ -243,7 +243,7 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
       if (allRows[onAirIndex]) allRows[onAirIndex].classList.add('on-air');
     }
   }
-  
+
   if (!state.timerPollTimeout) pollOnAirTimer();
 }
 

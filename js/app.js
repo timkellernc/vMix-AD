@@ -1,6 +1,6 @@
 import { state, dom } from './state.js';
 import { init, setupSettingsListeners } from './settings.js';
-import { renderRows, appendRowItem, syncFileVisualState, syncRowFilesToServer } from './dom.js';
+import { renderRows, appendRowItem, syncFileVisualState, syncRowFilesToServer, updateRowItem } from './dom.js';
 import { startTimerOnNextRow, startTimerOnPrevRow, optimisticUpdateTimerUI, pollOnAirTimer, initClock } from './timers.js';
 import { executeNextSpacebarAction } from './automation.js';
 import { enqueueVmixAction, processBatch, startReadAheadQueue, pollMissingMedia } from './media.js';
@@ -590,6 +590,8 @@ dom.menuMarkFloated.addEventListener('click', async () => {
   } else {
     activeContextMenuRow.classList.remove('floated');
   }
+
+  updateRowItem(item, activeContextMenuRow, targetIndex + 1);
 });
 
 dom.menuStartTimer.addEventListener('click', async () => {

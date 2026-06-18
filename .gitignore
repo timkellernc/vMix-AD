@@ -4,6 +4,7 @@ electron.zip
 /dist
 renderer_old.js
 debug-log.txt
+vmix_api.xml
 
 # OS Generated
 .DS_Store

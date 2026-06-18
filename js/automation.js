@@ -6,6 +6,9 @@ import { showToast } from './utils.js';
 
 export function getNextStepCursor() {
   const getFirstCmdOfRow = (rIdx) => {
+    while (rIdx < state.globalParsedItems.length && state.globalParsedItems[rIdx].isFloated) {
+      rIdx++;
+    }
     if (rIdx >= state.globalParsedItems.length) return null;
     const item = state.globalParsedItems[rIdx];
     const cmds = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
@@ -174,7 +177,8 @@ export async function executeNextSpacebarAction() {
     const cmdToTake = cmds[nextCursor.cmd];
     const rowEl = document.getElementById(`row-item-${nextCursor.row + 1}`);
 
-    const promise = executeTake(item, parseAutomationCode(cmdToTake), rowEl);
+    const startingVideoIndex = calculateStartingVideoIndex(cmds, nextCursor.cmd);
+    const promise = executeTake(item, parseAutomationCode(cmdToTake), rowEl, startingVideoIndex);
     state.activeAutomationPromise = promise;
     promise.finally(() => {
       if (state.activeAutomationPromise === promise) {
@@ -204,10 +208,15 @@ export async function previewNextCommand(cursor) {
     destMix = destToken.number !== null ? destToken.number : (destToken.target !== undefined ? destToken.target : null);
   }
     let mixParam = '';
+    let invalidDestination = false;
     if (destMix !== null && destMix !== '') {
       const mixIndex = await resolveMixIndex(destMix);
       if (mixIndex !== undefined && mixIndex !== null && mixIndex !== '') {
         mixParam = `&Mix=${mixIndex}`;
+      } else if (mixIndex === 0) {
+        mixParam = '';
+      } else if (mixIndex === null) {
+        invalidDestination = true;
       }
     }
   const inputToken = tokens.find(t => t.type === 'Input');
@@ -218,7 +227,9 @@ export async function previewNextCommand(cursor) {
       target = inputToken.number !== null ? `${inputToken.target}${inputToken.target.endsWith(' ') ? '' : ' '}${inputToken.number}` : inputToken.target;
     }
     if (target) {
-      window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(target)}`);
+      if (!invalidDestination) {
+        window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(target)}${mixParam}`);
+      }
     }
     return;
   }
@@ -231,10 +242,20 @@ export async function previewNextCommand(cursor) {
   if (hasSot || hasVo || hasDest) {
     const prefix = dom.inPrefix.value || 'Video';
     if (item.files && item.files.length > 0) {
-      const targetFileObj = item.files[0];
+      let fileIndex = 0;
+      const sotVoToken = tokens.find(t => t.type === 'Macro' && (t.function === 'SOT' || t.function === 'VO'));
+      if (sotVoToken && sotVoToken.number !== null && sotVoToken.number > 0) {
+        fileIndex = sotVoToken.number - 1;
+      } else {
+        fileIndex = calculateStartingVideoIndex(cmds, cursor.cmd);
+      }
+
+      const targetFileObj = item.files[fileIndex];
       if (targetFileObj && targetFileObj.loadedSlot) {
         const inputName = `${prefix} ${targetFileObj.loadedSlot}`;
-        window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(inputName)}`);
+        if (!invalidDestination) {
+          window.api.vmixRequest(`Function=PreviewInput&Input=${encodeURIComponent(inputName)}${mixParam}`);
+        }
       }
     }
     return;
@@ -359,8 +380,34 @@ export function parseAutomationCode(codeString) {
   return commands;
 }
 
-export async function executeTake(item, parsedTokensArray, rowElement) {
-  let autoIncrementVideoIndex = 0;
+export function calculateStartingVideoIndex(cmds, targetCmdIndex) {
+  let videoIndex = 0;
+  for (let i = 0; i < targetCmdIndex; i++) {
+    const parsedArrays = parseAutomationCode(cmds[i]);
+    for (const tokens of parsedArrays) {
+      let currentDestination = false;
+      for (const t of tokens) {
+        if (t.type === 'Destination') {
+          currentDestination = true;
+        } else if (t.type === 'Macro' && (t.function === 'SOT' || t.function === 'VO')) {
+          if (t.number === null) {
+            videoIndex++;
+          }
+          currentDestination = false;
+        } else if (t.type === 'Input' || t.type === 'Overlay') {
+          currentDestination = false;
+        }
+      }
+      if (currentDestination) {
+        videoIndex++;
+      }
+    }
+  }
+  return videoIndex;
+}
+
+export async function executeTake(item, parsedTokensArray, rowElement, startingVideoIndex = 0) {
+  let autoIncrementVideoIndex = startingVideoIndex;
 
   for (const tokens of parsedTokensArray) {
     await executeAutomationTokens(item, tokens, () => {
@@ -447,10 +494,15 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
     }
 
     let mixParam = '';
+    let invalidDestination = false;
     if (currentDestination !== null && currentDestination !== '') {
       const mixIndex = await resolveMixIndex(currentDestination);
       if (mixIndex !== undefined && mixIndex !== null && mixIndex !== '') {
         mixParam = `&Mix=${mixIndex}`;
+      } else if (mixIndex === 0) {
+        mixParam = '';
+      } else if (mixIndex === null) {
+        invalidDestination = true;
       }
     }
 
@@ -500,6 +552,11 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : defaultTransitionFunc);
         const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : `&Duration=${defaultDuration}`;
         if (!targetFileObj.isPlaceholderLoaded) {
+          if (invalidDestination) {
+            showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
+            currentDestination = null;
+            continue;
+          }
           await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
 
           if (token.function === 'SOT') {
@@ -525,6 +582,11 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : (token.function || defaultTransitionFunc));
         const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : `&Duration=${defaultDuration}`;
         const valParam = token.parsedValue ? `&Value=${encodeURIComponent(token.parsedValue)}` : '';
+        if (invalidDestination) {
+          showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
+          currentDestination = null;
+          continue;
+        }
         await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}${durParam}${valParam}`);
       }
       currentDestination = null;
@@ -538,7 +600,14 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
       if (currentDestination) {
         func = explicitTransitionFunc || currentDestFunc || defaultTransitionFunc;
         const durParam = (func === explicitTransitionFunc) ? explicitTransitionDuration : `&Duration=${defaultDuration}`;
-        if (target) await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${mixParam}${durParam}`);
+        if (target) {
+          if (invalidDestination) {
+            showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
+            currentDestination = null;
+            continue;
+          }
+          await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${mixParam}${durParam}`);
+        }
         currentDestination = null;
       } else {
         if (token.isOff) {
@@ -598,7 +667,8 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
   }
 
   if (currentDestination !== null) {
-    let targetFileObj = item.files && item.files[0];
+    let fileIndex = getNextVideoIndex();
+    let targetFileObj = item.files && item.files[fileIndex];
     if (targetFileObj) {
       let finalSlot = null;
       if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
@@ -608,7 +678,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         const slotToUse = await getSafeSlot(baseSlotToUse);
         if (inCurrentIndex) inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize ? inPoolSize.value : 15) || 15)) ? 1 : slotToUse + 1;
 
-        const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: 0 };
+        const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
         await sendToVmix(dummyItemForVmix, slotToUse);
         finalSlot = slotToUse;
         targetFileObj.isLoaded = dummyItemForVmix.isLoaded;
@@ -622,16 +692,25 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
       const prefix = dom.inPrefix.value || 'Video';
       const inputName = `${prefix} ${finalSlot}`;
       let mixParam = '';
+      let invalidDestination = false;
       if (currentDestination !== null && currentDestination !== '') {
         const mixIndex = await resolveMixIndex(currentDestination);
         if (mixIndex !== undefined && mixIndex !== null && mixIndex !== '') {
           mixParam = `&Mix=${mixIndex}`;
+        } else if (mixIndex === 0) {
+          mixParam = '';
+        } else if (mixIndex === null) {
+          invalidDestination = true;
         }
       }
       const funcToUse = explicitTransitionFunc || currentDestFunc || defaultTransitionFunc;
       const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : `&Duration=${defaultDuration}`;
       if (!targetFileObj.isPlaceholderLoaded) {
-        await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+        if (invalidDestination) {
+          showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
+        } else {
+          await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+        }
       }
     }
   }
@@ -668,4 +747,67 @@ export async function testRawAutomation(codeString) {
       return current;
     }, null);
   }
+}
+
+export function generateAutomationTooltip(cmdString, parsedTokensArray) {
+  let lines = [];
+  lines.push(`${cmdString}`);
+
+  for (const tokens of parsedTokensArray) {
+    let transToken = tokens.find(t => t.type === 'Transition');
+    let explicitTransFunc = transToken ? transToken.function : null;
+    
+    let destToken = tokens.find(t => t.type === 'Destination');
+    let destString = destToken ? (destToken.target || destToken.number || '') : '';
+    let destFunc = destToken ? destToken.function : null;
+
+    for (const token of tokens) {
+      if (token.type === 'Transition' || token.type === 'Destination') continue;
+
+      let funcName = token.function || 'Unknown';
+      let targetName = token.target || '';
+      if (token.number !== null && token.number !== undefined) {
+        targetName = `${targetName}${targetName.endsWith(' ') ? '' : ' '}${token.number}`;
+      }
+      
+      let valStr = '';
+      if (token.parsedValue || token.value) {
+        valStr = `, Value: ${token.parsedValue || token.value}`;
+      }
+      if (token.type === 'Wait' || token.type === 'Background Wait' || (token.type === 'Macro' && (token.function === 'WAIT' || token.function === 'BWAIT'))) {
+        let delayMs = token.number !== null ? token.number : (parseInt(token.value, 10) || parseInt(token.parsedValue, 10) || 0);
+        lines.push(`- Function: ${token.type === 'Background Wait' || token.function === 'BWAIT' ? 'Background Wait' : 'Wait'}, Delay: ${delayMs}ms`);
+        continue;
+      }
+      
+      if (token.type === 'Input') {
+        funcName = explicitTransFunc || destFunc || token.function || 'Cut';
+      }
+      if (token.type === 'Overlay') {
+        if (token.isOff) {
+          funcName = funcName.replace('In', 'Out');
+        }
+      }
+
+      let line = `- Function: ${funcName}`;
+      if (targetName) line += `, Input: ${targetName}`;
+      if (valStr) line += valStr;
+      
+      if (destString && token.type === 'Input') {
+        line += ` (To: ${destString})`;
+      }
+
+      lines.push(line);
+    }
+    
+    const hasImpliedTarget = !tokens.some(t => ['Input', 'Overlay', 'Virtual Set', 'Custom API', 'Macro', 'Wait', 'Background Wait'].includes(t.type) || (t.type === 'Mic'));
+    if (hasImpliedTarget && tokens.length > 0) {
+      const funcToUse = explicitTransFunc || destFunc || 'Cut';
+      let line = `- Function: ${funcToUse}, Input: [Row Media]`;
+      if (destString) line += ` (To: ${destString})`;
+      lines.push(line);
+    }
+  }
+
+  return lines.join('\n');
 }

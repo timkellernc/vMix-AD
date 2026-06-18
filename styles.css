@@ -128,9 +128,26 @@ h3 {
 }
 
 @keyframes pulseRefresh {
-  0% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7); background-color: var(--panel-bg); color: var(--text-primary); border-color: var(--accent); }
-  50% { box-shadow: 0 0 0 10px rgba(255, 59, 48, 0); background-color: rgba(255, 59, 48, 0.2); color: #fff; border-color: var(--accent); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0); background-color: var(--panel-bg); color: var(--text-primary); border-color: var(--accent); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7);
+    background-color: var(--panel-bg);
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
+
+  50% {
+    box-shadow: 0 0 0 10px rgba(255, 59, 48, 0);
+    background-color: rgba(255, 59, 48, 0.2);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 59, 48, 0);
+    background-color: var(--panel-bg);
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
 }
 
 .btn.pulse-refresh {
@@ -246,8 +263,8 @@ h3 {
 }
 
 .file-entry {
-  padding: 2px 8px !important;
-  margin: 1px 0;
+  padding: 0px 8px !important;
+  margin: 0px 0;
   border-radius: 6px;
   border: 1px solid transparent;
   transition: all 0.2s ease;
