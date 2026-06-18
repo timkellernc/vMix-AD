@@ -197,6 +197,9 @@ dom.activeRundownTitle.addEventListener('click', async () => {
     if (!res.success) throw new Error(res.error);
     if (!res.data || res.data.length === 0) throw new Error("No rundowns found.");
 
+    const settings = await window.api.getSettings();
+    if (dom.inRundownShowdir) dom.inRundownShowdir.value = settings.showDirectory || '';
+
     dom.selectRundown.innerHTML = '';
     let activeRundowns = res.data.filter(rd => rd.Archived !== 1 && rd.Template !== 1);
 
@@ -227,7 +230,16 @@ dom.activeRundownTitle.addEventListener('click', async () => {
 dom.btnLoadRundown.addEventListener('click', async () => {
   const option = dom.selectRundown.options[dom.selectRundown.selectedIndex];
   const title = option ? option.innerText : dom.selectRundown.value;
-  await window.api.saveSettings({ lastRundownId: dom.selectRundown.value, lastRundownTitle: title });
+  
+  const newShowDir = dom.inRundownShowdir ? dom.inRundownShowdir.value : '';
+  if (dom.inShowdir) dom.inShowdir.value = newShowDir;
+  
+  await window.api.saveSettings({ 
+    lastRundownId: dom.selectRundown.value, 
+    lastRundownTitle: title,
+    showDirectory: newShowDir
+  });
+  
   await loadApiRundown(dom.selectRundown.value, false, title);
   dom.modalRundowns.classList.remove('visible');
 });
@@ -240,6 +252,13 @@ dom.btnRefreshRundown.addEventListener('click', async () => {
     alert("No API rundown is currently loaded. Use 'Select Rundown' first.");
   }
 });
+
+if (dom.btnRundownSelectShowdir) {
+  dom.btnRundownSelectShowdir.addEventListener('click', async () => {
+    const dir = await window.api.selectDirectory();
+    if (dir && dom.inRundownShowdir) dom.inRundownShowdir.value = dir;
+  });
+}
 
 dom.btnResetRundown.addEventListener('click', async () => {
   const settings = await window.api.getSettings();

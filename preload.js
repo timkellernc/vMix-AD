@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('api', {
   openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
   getVideoDuration: (filePath) => ipcRenderer.invoke('get-video-duration', filePath),
   readCsvFile: (path) => ipcRenderer.invoke('read-csv-file', path),
-  getPlaceholderPath: () => ipcRenderer.invoke('get-placeholder-path')
+  getPlaceholderPath: () => ipcRenderer.invoke('get-placeholder-path'),
+  rescanDirectories: () => ipcRenderer.invoke('rescan-directories')
 });

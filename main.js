@@ -35,7 +35,7 @@ ipcMain.handle('get-video-duration', (event, filePath) => {
       filePath
     ], (error, stdout, stderr) => {
       if (error) {
-        fs.appendFileSync(path.join(__dirname, 'debug-log.txt'), 'Duration Error for ' + filePath + ': ' + error.message + '\n');
+        fs.appendFileSync(path.join(app.getPath('userData'), 'debug-log.txt'), 'Duration Error for ' + filePath + ': ' + error.message + '\n');
         return resolve(null);
       }
       const duration = parseFloat(stdout);
@@ -46,6 +46,7 @@ ipcMain.handle('get-video-duration', (event, filePath) => {
 
 let mainWindow;
 let fallbackDictionary = {};
+let showDictionary = {};
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -73,11 +74,12 @@ app.whenReady().then(() => {
     }
   });
 
-  // Scan defaults directory on startup if it exists
+  // Scan directories on startup if they exist
   const defaultsDir = store.get('defaultsDirectory');
-  if (defaultsDir) {
-    scanDefaultsDirectory(defaultsDir);
-  }
+  if (defaultsDir) scanDefaultsDirectory(defaultsDir);
+
+  const showDir = store.get('showDirectory');
+  if (showDir) scanShowDirectory(showDir);
 });
 
 app.on('window-all-closed', () => {
@@ -97,6 +99,9 @@ ipcMain.handle('save-settings', (event, settings) => {
   store.set(settings);
   if (settings.defaultsDirectory && settings.defaultsDirectory !== store.get('defaultsDirectory')) {
     scanDefaultsDirectory(settings.defaultsDirectory);
+  }
+  if (settings.showDirectory && settings.showDirectory !== store.get('showDirectory')) {
+    scanShowDirectory(settings.showDirectory);
   }
   return true;
 });
@@ -167,17 +172,25 @@ function isFileReady(filePath) {
 // File Management & Fallbacks
 function deepScanFiles(dir, fileList = []) {
   if (!fs.existsSync(dir)) return fileList;
-  const files = fs.readdirSync(dir);
-  for (const file of files) {
-    const filePath = path.join(dir, file);
-    if (fs.statSync(filePath).isDirectory()) {
-      deepScanFiles(filePath, fileList);
-    } else {
-      const ext = getExt(file);
-      if (validExts.includes(ext)) {
-        fileList.push(filePath);
+  try {
+    const files = fs.readdirSync(dir);
+    for (const file of files) {
+      const filePath = path.join(dir, file);
+      try {
+        if (fs.statSync(filePath).isDirectory()) {
+          deepScanFiles(filePath, fileList);
+        } else {
+          const ext = getExt(file);
+          if (validExts.includes(ext)) {
+            fileList.push(filePath);
+          }
+        }
+      } catch (err) {
+        // Ignore stat or read errors for individual files/folders
       }
     }
+  } catch (err) {
+    // Ignore read errors for unreadable directories (e.g. System Volume Information)
   }
   return fileList;
 }
@@ -197,10 +210,33 @@ function scanDefaultsDirectory(dirPath) {
   console.log(`Scanned defaults. Found ${Object.keys(fallbackDictionary).length} fallback files.`);
 }
 
+function scanShowDirectory(dirPath) {
+  showDictionary = {};
+  if (!dirPath || !fs.existsSync(dirPath)) return;
+
+  const allFiles = deepScanFiles(dirPath);
+  for (const filePath of allFiles) {
+    const filename = path.basename(filePath).toLowerCase();
+    // Use the first found file for a given filename
+    if (!showDictionary[filename]) {
+      showDictionary[filename] = filePath;
+    }
+  }
+  console.log(`Scanned show directory. Found ${Object.keys(showDictionary).length} files.`);
+}
+
 ipcMain.handle('scan-defaults-now', () => {
   const dir = store.get('defaultsDirectory');
   scanDefaultsDirectory(dir);
   return Object.keys(fallbackDictionary).length;
+});
+
+ipcMain.handle('rescan-directories', () => {
+  const defaultsDir = store.get('defaultsDirectory');
+  if (defaultsDir) scanDefaultsDirectory(defaultsDir);
+  
+  const showDir = store.get('showDirectory');
+  if (showDir) scanShowDirectory(showDir);
 });
 
 
@@ -224,10 +260,21 @@ ipcMain.handle('resolve-media', (event, filename) => {
     validExts.forEach(e => candidates.push(`${filename}.${e}`));
   }
 
-  // 1. Check Show Directory
+  // 1. Check Show Directory directly (instant, doesn't need cache)
   if (showDir && fs.existsSync(showDir)) {
     for (const cand of candidates) {
       const showPath = path.join(showDir, cand);
+      if (isFileReady(showPath)) {
+        return { path: showPath, isFallback: false };
+      }
+    }
+  }
+
+  // 1b. Check Show Directory subdirectories via cache
+  for (const cand of candidates) {
+    const lowerFilename = cand.toLowerCase();
+    if (showDictionary[lowerFilename]) {
+      const showPath = showDictionary[lowerFilename];
       if (isFileReady(showPath)) {
         return { path: showPath, isFallback: false };
       }

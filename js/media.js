@@ -87,27 +87,30 @@ export async function sendToVmix(item, slotIndex) {
     prevItem.isPlaceholderLoaded = false;
 
     if (prevItem._sourceFileObj) {
-      prevItem._sourceFileObj.loadedSlot = null;
-      prevItem._sourceFileObj.isPlaceholderLoaded = false;
-    }
-
-    if (prevItem._sourceRowId && prevItem._sourceFileIndex !== undefined) {
-      const row = document.getElementById(prevItem._sourceRowId);
-      if (row) {
-        const entry = row.querySelector(`.file-entry[data-file-index="${prevItem._sourceFileIndex}"]`);
-        if (entry) {
-          entry.classList.remove('placeholder-loaded');
-          const btn = entry.querySelector('.btn-run');
-          if (btn) {
-            if (btn.innerText === "Searching...") {
-              btn.innerText = "Skipped";
-              btn.classList.remove('success', 'primary');
-              btn.style.borderColor = 'var(--text-secondary)';
-              btn.style.color = 'var(--text-secondary)';
-              btn.style.backgroundColor = 'var(--panel-bg)';
-              btn.style.animation = 'none'; 
-            } else if (btn.innerText.startsWith("Loaded [")) {
-              btn.innerText = "Loaded";
+      if (prevItem._sourceFileObj.loadedSlot === slotIndex) {
+        prevItem._sourceFileObj.loadedSlot = null;
+        prevItem._sourceFileObj.isLoaded = false;
+        prevItem._sourceFileObj.isPlaceholderLoaded = false;
+        
+        if (prevItem._sourceRowId && prevItem._sourceFileIndex !== undefined) {
+          const row = document.getElementById(prevItem._sourceRowId);
+          if (row) {
+            const entry = row.querySelector(`.file-entry[data-file-index="${prevItem._sourceFileIndex}"]`);
+            if (entry) {
+              entry.classList.remove('placeholder-loaded');
+              const btn = entry.querySelector('.btn-run');
+              if (btn) {
+                if (btn.innerText === "Searching...") {
+                  btn.innerText = "Skipped";
+                  btn.classList.remove('success', 'primary');
+                  btn.style.borderColor = 'var(--text-secondary)';
+                  btn.style.color = 'var(--text-secondary)';
+                  btn.style.backgroundColor = 'var(--panel-bg)';
+                  btn.style.animation = 'none'; 
+                } else if (btn.innerText.startsWith("Loaded [")) {
+                  btn.innerText = "Loaded";
+                }
+              }
             }
           }
         }
@@ -174,7 +177,6 @@ export async function sendToVmix(item, slotIndex) {
 
   item.isLoaded = true;
   if (item._sourceFileObj) item._sourceFileObj.isLoaded = true;
-  if (item._sourceFileObj) item._sourceFileObj.isPlaceholderLoaded = false;
 }
 
 export async function processBatch(count, limitToSegment = false) {
@@ -294,7 +296,8 @@ export async function processReadAheadQueue() {
           enqueueVmixAction(async () => {
             try {
               const result = await sendToVmix(dummyItemForVmix, slotToUse);
-              f.loadedSlot = slotToUse;
+              f.loadedSlot = dummyItemForVmix.loadedSlot;
+              f.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
               if (result !== false) {
                 f.isLoaded = true;
                 f.isLoading = false;

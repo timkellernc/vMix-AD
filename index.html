@@ -95,7 +95,8 @@
       <div style="width: 50px;">Page</div>
       <div style="flex: 3; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Slug / Segment
       </div>
-      <div style="flex-grow: 4; flex-basis: 140px; display: grid; grid-template-columns: 140px 1fr; min-width: 0; align-items: center;">
+      <div
+        style="flex-grow: 4; flex-basis: 140px; display: grid; grid-template-columns: 140px 1fr; min-width: 0; align-items: center;">
         <div style="text-align: center;">Automation</div>
         <div style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
           <div style="padding: 4px 8px; margin: 2px 0; border: 1px solid transparent;">Media Files</div>
@@ -151,15 +152,16 @@
 
         <div class="settings-group">
           <h3>Directories</h3>
+          <h4>Where vMix AD will search for files. Includes sub-directories.</h4>
           <label>
-            Show Directory (Today's Media):
+            Show Directory:
             <div class="input-with-btn">
               <input type="text" id="setting-showdir" readonly>
               <button id="btn-select-showdir" class="btn small">Browse</button>
             </div>
           </label>
           <label>
-            Defaults / Generics Folder:
+            Fallbacks / Defaults Folder:
             <div class="input-with-btn">
               <input type="text" id="setting-defaultsdir" readonly>
               <button id="btn-select-defaultsdir" class="btn small">Browse</button>
@@ -238,6 +240,14 @@
       <div class="modal-body">
         <label>Available Rundowns:</label>
         <select id="select-rundown" style="margin-bottom: 20px;"></select>
+
+        <label style="display: block; text-align: left; margin-bottom: 20px;">
+          Show Directory:
+          <div class="input-with-btn">
+            <input type="text" id="rundown-setting-showdir" readonly style="margin-top: 6px;">
+            <button id="btn-rundown-select-showdir" class="btn small" style="margin-top: 6px;">Browse</button>
+          </div>
+        </label>
 
         <div
           style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--panel-border); padding-top: 16px; margin-top: 8px;">
@@ -318,7 +328,8 @@
       </div>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 12px; align-items: center;">
         <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
-          <input type="text" id="in-automation-test" placeholder="Type automation string (e.g. C1M1CG1)..." style="flex: 1; max-width: 300px;">
+          <input type="text" id="in-automation-test" placeholder="Type automation string (e.g. C1M1CG1)..."
+            style="flex: 1; max-width: 300px;">
           <button id="btn-run-automation-test" class="btn primary small">▶ Run Test</button>
         </div>
         <button id="btn-close-mappings-footer" class="btn secondary">Close</button>

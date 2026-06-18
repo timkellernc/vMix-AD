@@ -60,6 +60,10 @@ export function startAutoRefreshPolling() {
 export async function refreshSignatureQuietly() {
   if (!state.activeRundownId) return;
   state.lastLocalUpdate = Date.now();
+  
+  // Rescan directories in background when quietly refreshing
+  window.api.rescanDirectories().catch(e => console.error(e));
+
   try {
     let res = await window.api.rundownRequest('getRows', { RundownID: state.activeRundownId });
     if (res.success) {
@@ -83,6 +87,9 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
   state.lastRundownSignature = null;
   state.recentRundownSignatures.clear();
   dom.btnRefreshRundown.classList.remove('pulse-refresh');
+
+  // Sync latest directory contents before loading
+  await window.api.rescanDirectories();
 
   let res = await window.api.rundownRequest('getRows', { RundownID: rundownId });
   dom.btnRefreshRundown.disabled = false;

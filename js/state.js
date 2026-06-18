@@ -58,6 +58,8 @@ export const dom = {
   btnCloseRundowns: document.getElementById('btn-close-rundowns'),
   btnLoadRundown: document.getElementById('btn-load-rundown'),
   selectRundown: document.getElementById('select-rundown'),
+  inRundownShowdir: document.getElementById('rundown-setting-showdir'),
+  btnRundownSelectShowdir: document.getElementById('btn-rundown-select-showdir'),
 
   modalSettings: document.getElementById('settings-modal'),
   btnOpenSettings: document.getElementById('btn-settings'),

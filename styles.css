@@ -4,6 +4,7 @@
   --panel-border: rgba(255, 255, 255, 0.1);
   --text-primary: #ffffff;
   --text-secondary: #a0a5b1;
+  --text-tertiary: #707581;
   --accent: #ff3b30;
   --accent-hover: #ff5c53;
   --success: #34c759;
@@ -573,6 +574,14 @@ input[type="text"].row-est-duration:focus {
   font-size: 0.875rem;
   text-transform: uppercase;
   color: var(--text-secondary);
+  margin-bottom: 12px;
+  letter-spacing: 0.05em;
+}
+
+.settings-group h4 {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
   margin-bottom: 12px;
   letter-spacing: 0.05em;
 }
