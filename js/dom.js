@@ -51,7 +51,7 @@ export function appendRowItem(item, insertBeforeNode = null) {
 
   let newFilesSig = item.automationCode || '';
   if (item.files) {
-    newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
+    newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.resolvedPath}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
   if (item.isCustom) newFilesSig += '||CUSTOM';
   row.dataset.filesSig = newFilesSig;
@@ -385,7 +385,31 @@ export function attachFilesEventListeners(item, row) {
 
       btn.innerText = "Sending...";
       const parsedTokens = parseAutomationCode(specificCmd);
-      executeTake(item, parsedTokens, row).then(() => {
+
+      const runLogic = async () => {
+        if (state.activeAutomationPromise) {
+          state.flushAutomation = true;
+          if (state.activeAutomationAbortController) {
+            state.activeAutomationAbortController.abort();
+          }
+          try {
+            await state.activeAutomationPromise;
+          } catch(e) {}
+        }
+        state.flushAutomation = false;
+
+        const promise = executeTake(item, parsedTokens, row);
+        state.activeAutomationPromise = promise;
+        
+        promise.finally(() => {
+          if (state.activeAutomationPromise === promise) {
+            state.activeAutomationPromise = null;
+            state.flushAutomation = false;
+          }
+        });
+
+        await promise;
+
         btn.innerText = specificCmd;
 
         if (String(state.activeOnAirRowId) !== String(item.rowId)) {
@@ -401,7 +425,9 @@ export function attachFilesEventListeners(item, row) {
 
         state.activeOnAirCmdIndex = index;
         syncAutomationUI();
-      }).catch(err => {
+      };
+
+      runLogic().catch(err => {
         console.error("Automation error:", err);
         btn.innerText = "ERROR";
       });
@@ -593,7 +619,7 @@ export function updateRowItem(item, row, newIndex) {
 
   let newFilesSig = item.automationCode || '';
   if (item.files) {
-    newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
+    newFilesSig += '||' + item.files.map(f => `${f.requestedFile}|${f.resolvedPath}|${f.isLoaded}|${f.isPlaceholderLoaded}|${f.loadedSlot}`).join('||');
   }
   if (item.isCustom) newFilesSig += '||CUSTOM';
 

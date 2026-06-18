@@ -125,6 +125,23 @@ ipcMain.handle('select-file', async () => {
   return null;
 });
 
+ipcMain.handle('get-placeholder-path', () => {
+  const userDataPath = app.getPath('userData');
+  const destPath = path.join(userDataPath, 'placeholder.png');
+  if (!fs.existsSync(destPath)) {
+    const srcPath = path.join(__dirname, 'placeholder.png');
+    if (fs.existsSync(srcPath)) {
+      try {
+        fs.copyFileSync(srcPath, destPath);
+      } catch (e) {
+        console.error("Failed to copy placeholder.png to userData", e);
+        return srcPath;
+      }
+    }
+  }
+  return destPath;
+});
+
 const validExts = ["mp4", "mov", "mxf", "mpg", "m4v", "webm", "ts", "qt", "jpg", "png", "webp", "tiff", "tif", "bmp", "heif", "mp3", "wav", "gt", "xaml"];
 
 function getExt(filename) {

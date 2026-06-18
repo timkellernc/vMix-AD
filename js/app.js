@@ -255,7 +255,53 @@ dom.btnResetRundown.addEventListener('click', async () => {
         console.error("Failed to stop timer during reset", e);
       }
     }
+    
+    // Reset Next Slot to 1
+    if (dom.inCurrentIndex) dom.inCurrentIndex.value = 1;
+    
+    // Explicitly zero out all items to clear "Loaded" DOM labels
+    state.globalParsedItems = [];
+    if (dom.rundownList) dom.rundownList.innerHTML = '';
+    
+    dom.btnResetRundown.innerText = "Resetting...";
+    dom.btnResetRundown.disabled = true;
+    
     await loadApiRundown(settings.lastRundownId, false, settings.lastRundownTitle);
+    
+    // Rescan durations for valid media files
+    for (const item of state.globalParsedItems) {
+      if (item.files) {
+        for (const file of item.files) {
+          if (file.resolvedPath && file.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i)) {
+            try {
+              const dur = await window.api.getVideoDuration(file.resolvedPath);
+              if (dur && !isNaN(dur) && Math.abs((item.estDuration || 0) - dur) > 1) {
+                item.estDuration = dur;
+                // Update the row-est-duration UI span visually
+                const row = document.querySelector(`.row-item[data-row-id="${item.rowId}"]`);
+                if (row) {
+                  const estInput = row.querySelector('.row-est-duration');
+                  if (estInput) {
+                    const mins = Math.floor(dur / 60);
+                    const secs = Math.floor(dur % 60).toString().padStart(2, '0');
+                    estInput.value = `${mins}:${secs}`;
+                  }
+                }
+                // Push back to Rundown Creator
+                await window.api.rundownRequest('updateRowField', {
+                  RundownID: settings.lastRundownId,
+                  RowID: item.rowId,
+                  EstimatedDuration: dur
+                });
+              }
+            } catch (err) {}
+          }
+        }
+      }
+    }
+    
+    dom.btnResetRundown.innerText = "Reset";
+    dom.btnResetRundown.disabled = false;
   } else {
     alert("No API rundown is currently loaded. Use 'Select Rundown' first.");
   }

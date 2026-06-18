@@ -20,6 +20,9 @@ export const state = {
   activeOnAirRowId: null,
   activeOnAirStartDate: null,
   activeOnAirCmdIndex: -1,
+  flushAutomation: false,
+  activeAutomationAbortController: null,
+  activeAutomationPromise: null,
   
   previewTimeout: null,
   lastPreviewCursorRow: -1,

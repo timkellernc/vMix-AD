@@ -149,6 +149,17 @@ export async function executeNextSpacebarAction() {
   const nextCursor = getNextStepCursor();
   if (!nextCursor) return; 
 
+  if (state.activeAutomationPromise) {
+    state.flushAutomation = true;
+    if (state.activeAutomationAbortController) {
+      state.activeAutomationAbortController.abort();
+    }
+    try {
+      await state.activeAutomationPromise;
+    } catch(e) {}
+  }
+  state.flushAutomation = false;
+
   const item = state.globalParsedItems[nextCursor.row];
   if (nextCursor.cmd === -1) {
     const { startTimerOnRowId } = await import('./timers.js');
@@ -163,7 +174,14 @@ export async function executeNextSpacebarAction() {
     const cmdToTake = cmds[nextCursor.cmd];
     const rowEl = document.getElementById(`row-item-${nextCursor.row + 1}`);
 
-    executeTake(item, parseAutomationCode(cmdToTake), rowEl);
+    const promise = executeTake(item, parseAutomationCode(cmdToTake), rowEl);
+    state.activeAutomationPromise = promise;
+    promise.finally(() => {
+      if (state.activeAutomationPromise === promise) {
+        state.activeAutomationPromise = null;
+        state.flushAutomation = false;
+      }
+    });
 
     state.activeOnAirCmdIndex = nextCursor.cmd;
     syncAutomationUI();
@@ -173,7 +191,7 @@ export async function executeNextSpacebarAction() {
 export async function previewNextCommand(cursor) {
   if (cursor.row < 0 || cursor.row >= state.globalParsedItems.length) return;
   const item = state.globalParsedItems[cursor.row];
-  const cmds = item.automationCode ? item.automationCode.split(/[ ,;]+/).filter(c => c.trim().length > 0) : [];
+  const cmds = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
   if (cursor.cmd < 0 || cursor.cmd >= cmds.length) return;
 
   const cmdStr = cmds[cursor.cmd];
@@ -269,6 +287,9 @@ export function parseAutomationCode(codeString) {
       { prefix: 'SOT', type: 'Macro', function: 'SOT', target: '' },
       { prefix: 'VO', type: 'Macro', function: 'VO', target: '' },
       { prefix: 'V', type: 'Macro', function: 'VO', target: '' },
+      { prefix: 'FS', type: 'Macro', function: 'VO', target: '' },
+      { prefix: 'BWAIT', type: 'Macro', function: 'BWAIT', target: '' },
+      { prefix: 'WAIT', type: 'Macro', function: 'WAIT', target: '' },
       { prefix: 'MOFF', type: 'Macro', function: 'MOFF', target: '' },
       { prefix: 'MO', type: 'Macro', function: 'MOFF', target: '' },
       { prefix: 'CGOFF', type: 'Macro', function: 'CGOFF', target: '' }
@@ -384,7 +405,41 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
 
   let currentDestination = null;
   let currentDestFunc = null;
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    
+    const isRegularWait = (token.type === 'Macro' && token.function === 'WAIT') || token.type === 'Wait';
+    const isBackgroundWait = (token.type === 'Macro' && token.function === 'BWAIT') || token.type === 'Background Wait';
+
+    if (isRegularWait || isBackgroundWait) {
+      let delayMs = token.number !== null ? token.number : (parseInt(token.value, 10) || parseInt(token.parsedValue, 10) || 0);
+
+      if (delayMs > 0) {
+        if (isBackgroundWait) {
+          const remainingTokens = tokens.slice(i + 1);
+          setTimeout(async () => {
+             await executeAutomationTokens(item, remainingTokens, getNextVideoIndex, rowElement);
+          }, delayMs);
+          return; 
+        } else {
+          if (!state.flushAutomation) {
+            state.activeAutomationAbortController = new AbortController();
+            try {
+              await new Promise((resolve) => {
+                const timeout = setTimeout(resolve, delayMs);
+                state.activeAutomationAbortController.signal.addEventListener('abort', () => {
+                  clearTimeout(timeout);
+                  resolve();
+                });
+              });
+            } catch (e) {}
+            state.activeAutomationAbortController = null;
+          }
+        }
+      }
+      continue;
+    }
+
     if (token.type === 'Destination') {
       currentDestination = token.number !== null ? token.number : (token.target !== undefined ? token.target : null);
       currentDestFunc = token.function;
@@ -494,6 +549,15 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         }
         const valParam = token.parsedValue ? `&Value=${encodeURIComponent(token.parsedValue)}` : '';
         if (target) await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${valParam}`);
+      }
+    } else if (token.type === 'Virtual Set') {
+      let target = token.target;
+      if (token.number !== null) {
+        target = token.number !== null ? `${token.target}${token.target.endsWith(' ') ? '' : ' '}${token.number}` : token.target;
+      }
+      if (target) {
+        const valParam = token.number !== null ? `&Value=${token.number}` : (token.parsedValue ? `&Value=${encodeURIComponent(token.parsedValue)}` : '');
+        await window.api.vmixRequest(`Function=SelectIndex&Input=${encodeURIComponent(target)}${valParam}`);
       }
     } else if (token.type === 'Custom API') {
       let apiStr = "";

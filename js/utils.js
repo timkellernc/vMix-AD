@@ -46,7 +46,7 @@ export function formatLiveTime(totalSeconds) {
   const absSec = Math.abs(totalSeconds);
   const h = Math.floor(absSec / 3600);
   const m = Math.floor((absSec % 3600) / 60);
-  const s = absSec % 60;
+  const s = Math.floor(absSec % 60);
   
   const hStr = h > 0 ? `${h}:` : '';
   const mStr = h > 0 && m < 10 ? `0${m}` : `${m}`;

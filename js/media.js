@@ -111,9 +111,7 @@ export async function sendToVmix(item, slotIndex) {
     isPlaceholder = true;
     item.isPlaceholderLoaded = true;
     if (item._sourceFileObj) item._sourceFileObj.isPlaceholderLoaded = true;
-    let appDir = decodeURIComponent(window.location.pathname.substring(1));
-    appDir = appDir.substring(0, appDir.lastIndexOf('/'));
-    targetPath = appDir + '/placeholder.png';
+    targetPath = await window.api.getPlaceholderPath();
   } else {
     item.isPlaceholderLoaded = false;
     if (item._sourceFileObj) item._sourceFileObj.isPlaceholderLoaded = false;
@@ -139,16 +137,17 @@ export async function sendToVmix(item, slotIndex) {
     }
   });
 
-  await window.api.vmixRequest(`Function=RemoveInput&Input=${inputName}`);
+  await window.api.vmixRequest(`Function=RemoveInput&Input=${encodeURIComponent(inputName)}`);
   await window.api.vmixRequest(`Function=AddInput&Value=${type}|${targetPath}`);
 
   const initialInputName = isPlaceholder ? 'placeholder.png' : item.originalFile;
-  await window.api.vmixRequest(`Function=SetInputName&Value=${inputName}&Input=${initialInputName}`);
+  await window.api.vmixRequest(`Function=SetInputName&Value=${encodeURIComponent(inputName)}&Input=${encodeURIComponent(initialInputName)}`);
 
   const parallelCmds = [
-    `Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${inputName}`,
+    `Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${encodeURIComponent(inputName)}`,
     ...audioCmds,
-    `Function=AudioAutoOff&Input=${inputName}`
+    `Function=AudioAutoOff&Input=${encodeURIComponent(inputName)}`,
+    `Function=AudioOff&Input=${encodeURIComponent(inputName)}`
   ];
 
   for (const cmd of parallelCmds) {

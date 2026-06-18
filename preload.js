@@ -11,5 +11,6 @@ contextBridge.exposeInMainWorld('api', {
   rundownRequest: (action, params) => ipcRenderer.invoke('rundown-request', action, params),
   openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
   getVideoDuration: (filePath) => ipcRenderer.invoke('get-video-duration', filePath),
-  readCsvFile: (path) => ipcRenderer.invoke('read-csv-file', path)
+  readCsvFile: (path) => ipcRenderer.invoke('read-csv-file', path),
+  getPlaceholderPath: () => ipcRenderer.invoke('get-placeholder-path')
 });

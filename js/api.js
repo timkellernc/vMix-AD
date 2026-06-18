@@ -180,16 +180,17 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
       existing = state.globalParsedItems.find(ex => ex.rowId === (r.RowID || r.ID || r.id));
     }
 
-    if (existing && existing.files && existing.files.length > 0) {
+    let fileField = getFileField(r);
+    const filePaths = (fileField || '').split(',').map(f => f.trim()).filter(Boolean);
+    const existingRequestedFilesStr = (existing && existing.files) ? existing.files.map(f => f.requestedFile).join(',') : '';
+
+    if (existing && existing.files && existing.files.length > 0 && existingRequestedFilesStr === filePaths.join(',')) {
       files = existing.files;
     } else {
-      let fileField = getFileField(r);
-      
       if (i === 0) {
         window.DEBUG_ROW_DATA = JSON.stringify(r);
       }
       
-      const filePaths = (fileField || '').split(',').map(f => f.trim()).filter(Boolean);
       for (const t of filePaths) {
         let resolvedPath = null;
         let originalFile = t;
@@ -225,7 +226,7 @@ export async function loadApiRundown(rundownId, preserveState = false, rundownTi
       page: r.PageNumber || '',
       type: r.Type || r.RowType || '',
       isFloated: !!r.Floated,
-      isBreak: (r.Type || r.RowType || '').toLowerCase().includes('break'),
+      isBreak: r.Break === true || r.Break === 'true' || r.Break === 1 || r.Break === '1',
       automationCode: autoCode,
       files: files,
       frontTime: front,

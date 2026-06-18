@@ -177,6 +177,7 @@ export function setupSettingsListeners() {
   });
 
   dom.btnSaveSettings.addEventListener('click', async () => {
+    const oldSettings = await window.api.getSettings();
     const busCheckboxes = document.querySelectorAll('#setting-audio-buses input[type="checkbox"]:checked');
     const selectedBuses = Array.from(busCheckboxes).map(cb => cb.value);
 
@@ -199,7 +200,14 @@ export function setupSettingsListeners() {
     };
     await window.api.saveSettings(settings);
 
-    renderRows(state.globalParsedItems);
+    // If the directory changed and we have a rundown open, rescan files
+    if (oldSettings.showDirectory !== dom.inShowdir.value && state.activeRundownId) {
+      state.globalParsedItems = [];
+      dom.rundownList.innerHTML = '';
+      await loadApiRundown(state.activeRundownId, false, dom.activeRundownTitle.innerText.replace(' (Error)', '').replace('Loading... (', '').replace(')', ''));
+    } else {
+      renderRows(state.globalParsedItems);
+    }
 
     dom.modalSettings.classList.remove('visible');
   });
@@ -439,6 +447,9 @@ export function addGroupCommandRow(cmd) {
         <option value="Overlay" ${cmd.type === 'Overlay' ? 'selected' : ''}>Overlay (CG)</option>
         <option value="Transition" ${cmd.type === 'Transition' ? 'selected' : ''}>Transition</option>
         <option value="Destination" ${cmd.type === 'Destination' ? 'selected' : ''}>Destination (Monitor/Mix)</option>
+        <option value="Virtual Set" ${cmd.type === 'Virtual Set' ? 'selected' : ''}>Virtual Set</option>
+        <option value="Wait" ${cmd.type === 'Wait' ? 'selected' : ''}>Wait Delay</option>
+        <option value="Background Wait" ${cmd.type === 'Background Wait' ? 'selected' : ''}>Background Wait</option>
         <option value="Custom API" ${cmd.type === 'Custom API' ? 'selected' : ''}>Custom API</option>
       </select>
     </td>
