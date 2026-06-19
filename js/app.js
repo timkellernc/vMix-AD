@@ -5,6 +5,7 @@ import { startTimerOnNextRow, startTimerOnPrevRow, optimisticUpdateTimerUI, poll
 import { executeNextSpacebarAction } from './automation.js';
 import { enqueueVmixAction, processBatch, startReadAheadQueue, pollMissingMedia } from './media.js';
 import { refreshSignatureQuietly, getApiRowsSignature, loadApiRundown } from './api.js';
+import { showToast } from './utils.js';
 
 // Setup settings modal and settings-related listeners
 setupSettingsListeners();
@@ -185,6 +186,18 @@ dom.inCurrentIndex.addEventListener('keydown', (e) => {
   }
 });
 
+dom.btnRefreshRundown.addEventListener('click', () => {
+  if (!state.activeRundownId) return;
+  window.api.resetCompanionPush();
+  refreshSignatureQuietly();
+});
+
+dom.btnResetRundown.addEventListener('click', async () => {
+  if (!state.activeRundownId) return;
+  window.api.resetCompanionPush();
+  await loadApiRundown(state.activeRundownId, false, dom.activeRundownTitle.innerText);
+});
+
 dom.btnCloseRundowns.addEventListener('click', () => {
   dom.modalRundowns.classList.remove('visible');
 });
@@ -306,12 +319,12 @@ dom.btnResetRundown.addEventListener('click', async () => {
                     estInput.value = `${mins}:${secs}`;
                   }
                 }
-                // Push back to Rundown Creator
-                await window.api.rundownRequest('updateRowField', {
-                  RundownID: settings.lastRundownId,
-                  RowID: item.rowId,
-                  EstimatedDuration: dur
-                });
+                // Push back to Rundown Creator (Disabled per user request)
+                // await window.api.rundownRequest('updateRowField', {
+                //   RundownID: settings.lastRundownId,
+                //   RowID: item.rowId,
+                //   EstimatedDuration: dur
+                // });
               }
             } catch (err) {}
           }
@@ -697,3 +710,86 @@ document.addEventListener('keydown', (e) => {
     dom.btnRefreshRundown.click();
   }
 });
+
+// ============================================
+// Companion API Integration
+// ============================================
+
+window.api.onCompanionAction((event, payload) => {
+  if (!payload || !payload.action) return;
+  switch (payload.action) {
+    case 'spacebar':
+      executeNextSpacebarAction();
+      break;
+    case 'loadBlock':
+      dom.btnLoadBlock.click();
+      break;
+    case 'loadNext':
+      dom.btnLoadElement.click();
+      break;
+    case 'initialize':
+      dom.btnInitializeRundown.click();
+      break;
+  }
+});
+
+window.api.onCompanionError((event, errMessage) => {
+  showToast("Companion API Push disabled due to connection error. Refresh to try again.");
+});
+
+export function pushStateToCompanion() {
+  if (!state.globalParsedItems) return;
+  
+  const allRows = Array.from(document.querySelectorAll('.row-item'));
+  const onAirIndex = allRows.findIndex(r => r.classList.contains('on-air'));
+  
+  let currentSlug = 'None';
+  let nextSlug = 'None';
+  
+  if (onAirIndex !== -1 && state.globalParsedItems[onAirIndex]) {
+    const item = state.globalParsedItems[onAirIndex];
+    currentSlug = `${item.slug} ${item.segment || ''}`.trim();
+    
+    // Find next non-floated row
+    for (let i = onAirIndex + 1; i < state.globalParsedItems.length; i++) {
+      if (!state.globalParsedItems[i].isFloated) {
+        const nextItem = state.globalParsedItems[i];
+        nextSlug = `${nextItem.slug} ${nextItem.segment || ''}`.trim();
+        break;
+      }
+    }
+  }
+
+  let liveCommand = 'None';
+  let nextCommand = 'None';
+
+  const liveBtn = document.querySelector('.btn-run-auto.program');
+  if (liveBtn) liveCommand = liveBtn.innerText;
+
+  const nextBtn = document.querySelector('.btn-run-auto.preview');
+  if (nextBtn) nextCommand = nextBtn.innerText;
+
+  const elBlockElapsed = document.getElementById('timer-block-elapsed');
+  const elRowElapsed = document.getElementById('timer-elapsed');
+  const elRemaining = document.getElementById('timer-remaining');
+  const elBlockRemaining = document.getElementById('timer-block-remaining');
+  const elOverUnder = document.getElementById('timer-on-over');
+
+  const payload = {
+    currentSlug,
+    nextSlug,
+    liveCommand,
+    nextCommand,
+    blockElapsed: elBlockElapsed ? elBlockElapsed.innerText : '00:00',
+    rowElapsed: elRowElapsed ? elRowElapsed.innerText : '00:00',
+    remaining: elRemaining ? elRemaining.innerText : '00:00',
+    blockRemaining: elBlockRemaining ? elBlockRemaining.innerText : '00:00',
+    overUnderTimer: elOverUnder ? elOverUnder.innerText : '--:--',
+    isBatchProcessing: state.isBatchProcessing
+  };
+
+  window.api.syncCompanionState(payload);
+}
+
+// Ensure the sync happens periodically
+setInterval(pushStateToCompanion, 250);

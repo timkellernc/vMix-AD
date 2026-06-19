@@ -224,6 +224,19 @@
           </label>
         </div>
 
+        <div class="settings-group">
+          <h3>Companion Push API (Optional)</h3>
+          <h4>Automatically push variables to Companion's REST API.</h4>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+            <input type="checkbox" id="setting-companion-push">
+            Enable Push to Companion
+          </label>
+          <label>
+            Companion API URL:
+            <input type="text" id="setting-companion-url" value="http://127.0.0.1:8000">
+          </label>
+        </div>
+
       </div>
       <div class="modal-footer">
         <button id="btn-save-settings" class="btn primary">Save & Close</button>

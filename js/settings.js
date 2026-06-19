@@ -19,6 +19,12 @@ export async function init(isStartup = false) {
   dom.inUse24Hr.checked = settings.use24Hr === true;
   state.currentAutomationColumnName = settings.automationColumnName || 'Coding';
   dom.inAutomationColumn.value = state.currentAutomationColumnName;
+  
+  const inCompanionPush = document.getElementById('setting-companion-push');
+  if (inCompanionPush) inCompanionPush.checked = settings.companionPush === true;
+  
+  const inCompanionUrl = document.getElementById('setting-companion-url');
+  if (inCompanionUrl) inCompanionUrl.value = settings.companionUrl || 'http://127.0.0.1:8000';
 
   if (settings.mappingGroups) {
     state.mappingGroups = settings.mappingGroups;
@@ -196,7 +202,9 @@ export function setupSettingsListeners() {
       audioBuses: selectedBuses,
       automationColumnName: dom.inAutomationColumn.value,
       mappingGroups: state.mappingGroups,
-      fadeDuration: parseInt(dom.inFadeDuration.value) || 500
+      fadeDuration: parseInt(dom.inFadeDuration.value) || 500,
+      companionPush: document.getElementById('setting-companion-push') ? document.getElementById('setting-companion-push').checked : false,
+      companionUrl: document.getElementById('setting-companion-url') ? document.getElementById('setting-companion-url').value : 'http://127.0.0.1:8000'
     };
     await window.api.saveSettings(settings);
 

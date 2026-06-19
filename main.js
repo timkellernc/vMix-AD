@@ -2,6 +2,50 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 const fs = require('fs');
+const http = require('http');
+
+let companionState = {};
+let companionPushFailed = false;
+
+const companionServer = http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200);
+    res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/api/state') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(companionState));
+  } else if (req.method === 'POST' && req.url === '/api/action') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('companion-action', payload);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
+    });
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+
+companionServer.listen(8099, '127.0.0.1', () => {
+  console.log('Companion HTTP server running on http://127.0.0.1:8099');
+});
 
 const store = new Store({
   defaults: {
@@ -89,6 +133,38 @@ app.on('window-all-closed', () => {
 });
 
 // IPC Handlers
+
+ipcMain.on('sync-companion-state', (event, stateObj) => {
+  if (companionPushFailed) return;
+  
+  companionState = stateObj;
+
+  const pushEnabled = store.get('companionPush');
+  const pushUrl = store.get('companionUrl');
+  if (pushEnabled && pushUrl) {
+    const baseUrl = pushUrl.replace(/\/$/, ''); // remove trailing slash
+    for (const [key, value] of Object.entries(stateObj)) {
+      const url = new URL(`${baseUrl}/api/custom-variable/${key}/value`);
+      url.searchParams.append('value', String(value));
+      fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      }).catch(err => {
+        if (!companionPushFailed) {
+          companionPushFailed = true;
+          console.error("Companion API Error: ", url.toString(), err.message);
+          event.sender.send('companion-error', err.message);
+        }
+      });
+    }
+  }
+});
+
+ipcMain.on('reset-companion-push', () => {
+  companionPushFailed = false;
+});
 
 // Settings
 ipcMain.handle('get-settings', () => {

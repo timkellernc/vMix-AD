@@ -127,6 +127,19 @@ export async function sendToVmix(item, slotIndex) {
   let targetPath = item.resolvedPath;
   let isPlaceholder = false;
 
+  if (targetPath) {
+    const recheck = await window.api.resolveMedia(targetPath);
+    if (!recheck || !recheck.path) {
+      targetPath = null;
+      item.resolvedPath = null;
+      if (item._sourceFileObj) item._sourceFileObj.resolvedPath = null;
+    } else {
+      targetPath = recheck.path;
+      item.resolvedPath = recheck.path;
+      if (item._sourceFileObj) item._sourceFileObj.resolvedPath = recheck.path;
+    }
+  }
+
   if (!targetPath) {
     if (!item.requestedFile) return; 
     isPlaceholder = true;
@@ -187,7 +200,15 @@ export async function processBatch(count, limitToSegment = false) {
     let targetSegment = null;
     const usedSlots = new Set();
   
-    for (let i = 0; i < state.globalParsedItems.length; i++) {
+    let startIndex = 0;
+    if (state.activeOnAirRowId) {
+      const activeIdx = state.globalParsedItems.findIndex(i => String(i.rowId) === String(state.activeOnAirRowId));
+      if (activeIdx > -1) {
+        startIndex = activeIdx;
+      }
+    }
+  
+    for (let i = startIndex; i < state.globalParsedItems.length; i++) {
       const item = state.globalParsedItems[i];
   
       if (!item.files || item.files.length === 0) continue;

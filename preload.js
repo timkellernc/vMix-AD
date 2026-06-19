@@ -13,5 +13,9 @@ contextBridge.exposeInMainWorld('api', {
   getVideoDuration: (filePath) => ipcRenderer.invoke('get-video-duration', filePath),
   readCsvFile: (path) => ipcRenderer.invoke('read-csv-file', path),
   getPlaceholderPath: () => ipcRenderer.invoke('get-placeholder-path'),
-  rescanDirectories: () => ipcRenderer.invoke('rescan-directories')
+  rescanDirectories: () => ipcRenderer.invoke('rescan-directories'),
+  onCompanionAction: (callback) => ipcRenderer.on('companion-action', callback),
+  syncCompanionState: (state) => ipcRenderer.send('sync-companion-state', state),
+  onCompanionError: (callback) => ipcRenderer.on('companion-error', callback),
+  resetCompanionPush: () => ipcRenderer.send('reset-companion-push')
 });
