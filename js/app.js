@@ -736,6 +736,12 @@ window.api.onCompanionAction((event, payload) => {
     case 'initialize':
       dom.btnInitializeRundown.click();
       break;
+    case 'refresh':
+      dom.btnRefreshRundown.click();
+      break;
+    case 'reset':
+      dom.btnResetRundown.click();
+      break;
   }
 });
 

@@ -182,7 +182,8 @@ export function appendRowItem(item, insertBeforeNode = null) {
     contextMenu.style.top = `${top}px`;
   });
 
-  row.addEventListener('dblclick', async () => {
+  row.addEventListener('dblclick', async (e) => {
+    if (e.target.closest('button') || e.target.closest('input') || e.target.closest('.file-entry')) return;
     state.activeScriptItem = item;
 
     if (item.script) {
@@ -598,7 +599,12 @@ export function attachFilesEventListeners(item, row) {
     const rowFile = entry.querySelector('.row-file');
 
     if (fileObj.resolvedPath) {
-      rowFile.addEventListener('click', () => {
+      let lastClick = 0;
+      rowFile.addEventListener('click', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        const now = Date.now();
+        if (now - lastClick < 1000) return;
+        lastClick = now;
         window.api.openFile(fileObj.resolvedPath);
       });
 

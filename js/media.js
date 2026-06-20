@@ -255,6 +255,7 @@ export async function processBatch(count, limitToSegment = false) {
 
       const slotToUse = await getSafeSlot(baseSlotToUse);
       if (usedSlots.has(slotToUse)) {
+        fileObj.isLoading = false;
         return; 
       }
       usedSlots.add(slotToUse);
