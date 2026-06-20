@@ -16,6 +16,13 @@ export async function init(isStartup = false) {
   dom.inFirstLoc.value = settings.firstInputLocation || 9;
   dom.inPoolSize.value = settings.poolSize || 15;
   dom.inProtectProgram.checked = settings.protectProgram !== false;
+  
+  const inEnableLookahead = document.getElementById('setting-enable-lookahead');
+  if (inEnableLookahead) inEnableLookahead.checked = settings.enableLookahead !== false;
+  
+  const inLookaheadElements = document.getElementById('setting-lookahead-elements');
+  if (inLookaheadElements) inLookaheadElements.value = settings.lookaheadElements || 3;
+
   dom.inUse24Hr.checked = settings.use24Hr === true;
   state.currentAutomationColumnName = settings.automationColumnName || 'Coding';
   dom.inAutomationColumn.value = state.currentAutomationColumnName;
@@ -198,6 +205,8 @@ export function setupSettingsListeners() {
       firstInputLocation: parseInt(dom.inFirstLoc.value) || 9,
       poolSize: parseInt(dom.inPoolSize.value) || 15,
       protectProgram: dom.inProtectProgram.checked,
+      enableLookahead: document.getElementById('setting-enable-lookahead') ? document.getElementById('setting-enable-lookahead').checked : true,
+      lookaheadElements: document.getElementById('setting-lookahead-elements') ? (parseInt(document.getElementById('setting-lookahead-elements').value) || 3) : 3,
       use24Hr: dom.inUse24Hr.checked,
       audioBuses: selectedBuses,
       automationColumnName: dom.inAutomationColumn.value,

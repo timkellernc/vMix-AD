@@ -113,6 +113,7 @@ dom.btnInit.addEventListener('click', () => {
       if (item.files) {
         item.files.forEach(f => {
           f.isLoaded = false;
+          f.hasBeenLoaded = false;
           f.isLoading = false;
           f.isPlaceholderLoaded = false;
         });
@@ -278,6 +279,7 @@ dom.btnResetRundown.addEventListener('click', async () => {
   if (settings.lastRundownId) {
     if (state.activeOnAirRowId) {
       optimisticUpdateTimerUI(0);
+      state.timerIgnoreApiUpdatesUntil = Date.now() + 10000; // Increased buffer for slow directory scans
       try {
         await window.api.rundownRequest('startTimingRow', {
           RundownID: settings.lastRundownId,
@@ -290,6 +292,10 @@ dom.btnResetRundown.addEventListener('click', async () => {
     
     // Reset Next Slot to 1
     if (dom.inCurrentIndex) dom.inCurrentIndex.value = 1;
+    
+    // Clear preview cursors so spacebar resumes at the very first command
+    state.lastPreviewCursorRow = -1;
+    state.lastPreviewCursorCmd = -1;
     
     // Explicitly zero out all items to clear "Loaded" DOM labels
     state.globalParsedItems = [];

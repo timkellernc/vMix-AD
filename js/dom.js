@@ -399,7 +399,7 @@ export function buildCombinedHtml(item) {
 }
 
 export function syncFileVisualState(item, fileIndex) {
-  const rowId = `row-item-${state.globalParsedItems.findIndex(i => i === item) + 1}`;
+  const rowId = `row-item-${state.globalParsedItems.findIndex(i => String(i.rowId) === String(item.rowId)) + 1}`;
   const row = document.getElementById(rowId);
   if (!row) return;
 
@@ -456,6 +456,7 @@ export function attachFilesEventListeners(item, row) {
       const parsedTokens = parseAutomationCode(specificCmd);
 
       const runLogic = async () => {
+        state.hasTriggeredAutomation = true;
         if (state.activeAutomationPromise) {
           state.flushAutomation = true;
           if (state.activeAutomationAbortController) {
@@ -467,10 +468,17 @@ export function attachFilesEventListeners(item, row) {
         }
         state.flushAutomation = false;
 
-        const cmds = item.automationCode ? item.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
+        const targetRowIdStr = row.id.replace('row-item-', '');
+        const targetItemIndex = parseInt(targetRowIdStr) - 1;
+        let latestItem = item;
+        if (targetItemIndex >= 0 && targetItemIndex < state.globalParsedItems.length) {
+          latestItem = state.globalParsedItems[targetItemIndex] || item;
+        }
+
+        const cmds = latestItem.automationCode ? latestItem.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
         const startingVideoIndex = calculateStartingVideoIndex(cmds, index);
 
-        const promise = executeTake(item, parsedTokens, row, startingVideoIndex);
+        const promise = executeTake(latestItem, parsedTokens, row, startingVideoIndex);
         state.activeAutomationPromise = promise;
 
         promise.finally(() => {
@@ -616,22 +624,47 @@ export function attachFilesEventListeners(item, row) {
       btnRun.addEventListener('click', async () => {
         if (btnRun.innerText === "Sending...") return;
 
-        if (!fileObj.isLoaded) {
+        // Dynamically fetch the latest item and fileObj from state in case the rundown refreshed
+        const latestIdx = state.globalParsedItems.findIndex(i => String(i.rowId) === String(item.rowId));
+        if (latestIdx === -1) return;
+        const latestItem = state.globalParsedItems[latestIdx];
+        const latestFileObj = latestItem.files[fileIndex];
+        if (!latestFileObj) return;
+
+        if (!latestFileObj.isLoaded) {
           enqueueVmixAction(async () => {
+            latestFileObj.isLoading = true;
             btnRun.innerText = "Sending...";
             const baseSlotToUse = parseInt(dom.inCurrentIndex.value) || 1;
             const slotToUse = await getSafeSlot(baseSlotToUse);
             dom.inCurrentIndex.value = (slotToUse + 1 > (parseInt(document.getElementById('setting-poolsize')?.value) || 15)) ? 1 : slotToUse + 1;
 
-            const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
+            const dummyItemForVmix = { ...latestItem, ...latestFileObj, _sourceFileObj: latestFileObj, _sourceRowId: row.id, _sourceFileIndex: fileIndex };
             const result = await sendToVmix(dummyItemForVmix, slotToUse);
 
             if (result !== false) {
-              fileObj.isLoaded = true;
-              fileObj.isLoading = false;
-              syncFileVisualState(item, fileIndex);
+              latestFileObj.isLoaded = true;
+              latestFileObj.hasBeenLoaded = true;
+              latestFileObj.isLoading = false;
+              syncFileVisualState(latestItem, fileIndex);
+              
+              // Fallback to guarantee button visually updates even if the row DOM was disconnected
+              if (btnRun.innerText === "Sending...") {
+                if (latestFileObj.isPlaceholderLoaded) {
+                  btnRun.innerText = "Searching...";
+                  btnRun.classList.remove('primary');
+                  btnRun.classList.add('success');
+                } else if (latestFileObj.isLoaded) {
+                  btnRun.innerText = latestFileObj.loadedSlot ? `Loaded [${latestFileObj.loadedSlot}]` : "Loaded";
+                  btnRun.classList.remove('primary');
+                  btnRun.classList.add('success');
+                } else {
+                  btnRun.innerText = "Load";
+                }
+              }
             } else {
               btnRun.innerText = "Load";
+              latestFileObj.isLoading = false;
             }
           });
         } else {
@@ -644,6 +677,8 @@ export function attachFilesEventListeners(item, row) {
           const inputName = `${prefix} ${fileObj.loadedSlot}`;
           if (fileObj.loadedSlot) {
             window.api.vmixRequest(`Function=${defaultTransitionFunc}&Input=${encodeURIComponent(inputName)}`);
+            fileObj.hasBeenPlayed = true;
+            state.hasTriggeredAutomation = true;
             state.activeOnAirCmdIndex = -1;
           }
         }

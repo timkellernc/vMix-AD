@@ -146,12 +146,16 @@ ipcMain.on('sync-companion-state', (event, stateObj) => {
     for (const [key, value] of Object.entries(stateObj)) {
       const url = new URL(`${baseUrl}/api/custom-variable/${key}/value`);
       url.searchParams.append('value', String(value));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1000);
       fetch(url.toString(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-        }
-      }).catch(err => {
+        },
+        signal: controller.signal
+      }).then(() => clearTimeout(timeoutId)).catch(err => {
+        clearTimeout(timeoutId);
         if (!companionPushFailed) {
           companionPushFailed = true;
           console.error("Companion API Error: ", url.toString(), err.message);

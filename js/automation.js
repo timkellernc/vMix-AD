@@ -16,6 +16,15 @@ export function getNextStepCursor() {
   };
 
   if (!state.activeOnAirRowId) {
+    if (state.lastPreviewCursorRow >= 0 && state.lastPreviewCursorRow < state.globalParsedItems.length) {
+      const row = state.globalParsedItems[state.lastPreviewCursorRow];
+      const cmds = row.automationCode ? row.automationCode.split(';').map(c => c.trim()).filter(c => c.length > 0) : [];
+      if (state.lastPreviewCursorCmd >= 0 && state.lastPreviewCursorCmd < cmds.length) {
+        return { row: state.lastPreviewCursorRow, cmd: state.lastPreviewCursorCmd };
+      } else {
+        return getFirstCmdOfRow(state.lastPreviewCursorRow);
+      }
+    }
     return getFirstCmdOfRow(0);
   }
 
@@ -533,9 +542,6 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
           await sendToVmix(dummyItemForVmix, slotToUse);
           finalSlot = slotToUse;
 
-          targetFileObj.isLoaded = dummyItemForVmix.isLoaded;
-          targetFileObj.loadedSlot = dummyItemForVmix.loadedSlot;
-          targetFileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
           syncFileVisualState(item, fileIndex);
 
           const rowIndex = state.globalParsedItems.findIndex(i => String(i.rowId) === String(item.rowId));
@@ -558,6 +564,14 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
             continue;
           }
           await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+          targetFileObj.hasBeenPlayed = true;
+          
+          if (currentDestination) {
+            const isVideo = targetFileObj && targetFileObj.resolvedPath && targetFileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i);
+            if (isVideo) {
+              await window.api.vmixRequest(`Function=Play&Input=${encodeURIComponent(inputName)}`);
+            }
+          }
 
           if (token.function === 'SOT') {
             await window.api.vmixRequest(`Function=AudioOn&Input=${encodeURIComponent(inputName)}`);
@@ -681,10 +695,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
         await sendToVmix(dummyItemForVmix, slotToUse);
         finalSlot = slotToUse;
-        targetFileObj.isLoaded = dummyItemForVmix.isLoaded;
-        targetFileObj.loadedSlot = dummyItemForVmix.loadedSlot;
-        targetFileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
-        syncFileVisualState(item, 0);
+        syncFileVisualState(item, fileIndex);
       } else {
         finalSlot = targetFileObj.loadedSlot;
       }
@@ -710,6 +721,10 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
           showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
         } else {
           await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
+          const isVideo = targetFileObj && targetFileObj.resolvedPath && targetFileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i);
+          if (isVideo) {
+            await window.api.vmixRequest(`Function=Play&Input=${encodeURIComponent(inputName)}`);
+          }
         }
       }
     }

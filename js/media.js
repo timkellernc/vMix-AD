@@ -74,8 +74,12 @@ export async function getSafeSlot(desiredSlot) {
   const activeTitles = await getVmixActiveSlotTitles();
   let slot = desiredSlot;
   const prefix = dom.inPrefix.value || 'Video';
-  while (activeTitles.includes(`${prefix} ${slot}`)) {
+  const poolSize = parseInt(document.getElementById('setting-poolsize')?.value) || 15;
+  let attempts = 0;
+  while (activeTitles.includes(`${prefix} ${slot}`) && attempts <= poolSize) {
     slot++;
+    if (slot > poolSize) slot = 1;
+    attempts++;
   }
   return slot;
 }
@@ -97,18 +101,23 @@ export async function sendToVmix(item, slotIndex) {
           if (row) {
             const entry = row.querySelector(`.file-entry[data-file-index="${prevItem._sourceFileIndex}"]`);
             if (entry) {
-              entry.classList.remove('placeholder-loaded');
               const btn = entry.querySelector('.btn-run');
-              if (btn) {
-                if (btn.innerText === "Searching...") {
-                  btn.innerText = "Skipped";
-                  btn.classList.remove('success', 'primary');
-                  btn.style.borderColor = 'var(--text-secondary)';
-                  btn.style.color = 'var(--text-secondary)';
-                  btn.style.backgroundColor = 'var(--panel-bg)';
-                  btn.style.animation = 'none'; 
-                } else if (btn.innerText.startsWith("Loaded [")) {
-                  btn.innerText = "Loaded";
+              if (btn && btn.innerText === "Searching...") {
+                btn.innerText = "Skipped";
+                btn.classList.remove('success', 'primary');
+                btn.style.borderColor = 'var(--text-secondary)';
+                btn.style.color = 'var(--text-secondary)';
+                btn.style.backgroundColor = 'var(--panel-bg)';
+                btn.style.animation = 'none'; 
+              } else {
+                // Determine the correct item to pass to syncFileVisualState
+                const targetRowIdStr = prevItem._sourceRowId.replace('row-item-', '');
+                const targetItemIndex = parseInt(targetRowIdStr) - 1;
+                if (targetItemIndex >= 0 && targetItemIndex < state.globalParsedItems.length) {
+                  const itemToSync = state.globalParsedItems[targetItemIndex];
+                  if (itemToSync) {
+                    syncFileVisualState(itemToSync, prevItem._sourceFileIndex);
+                  }
                 }
               }
             }
@@ -189,7 +198,11 @@ export async function sendToVmix(item, slotIndex) {
   }
 
   item.isLoaded = true;
-  if (item._sourceFileObj) item._sourceFileObj.isLoaded = true;
+  item.hasBeenLoaded = true;
+  if (item._sourceFileObj) {
+    item._sourceFileObj.isLoaded = true;
+    item._sourceFileObj.hasBeenLoaded = true;
+  }
 }
 
 export async function processBatch(count, limitToSegment = false) {
@@ -217,7 +230,7 @@ export async function processBatch(count, limitToSegment = false) {
       const fileObj = item.files[fIdx];
 
       if (itemsSent >= count) return;
-      if (item.isFloated || fileObj.isLoaded || fileObj.isLoading || (!fileObj.resolvedPath && !fileObj.requestedFile)) continue;
+      if (item.isFloated || fileObj.isLoaded || fileObj.isLoading || fileObj.hasBeenLoaded || (!fileObj.resolvedPath && !fileObj.requestedFile)) continue;
 
       if (limitToSegment) {
         const getBlockLetter = (item) => {
@@ -254,9 +267,6 @@ export async function processBatch(count, limitToSegment = false) {
       await sendToVmix(dummyItemForVmix, slotToUse);
       fileObj.isLoading = false;
 
-      fileObj.isLoaded = dummyItemForVmix.isLoaded;
-      fileObj.loadedSlot = dummyItemForVmix.loadedSlot;
-      fileObj.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
       syncFileVisualState(item, fIdx);
 
       let nextSlot = slotToUse + 1;
@@ -289,7 +299,12 @@ export async function processReadAheadQueue() {
     return;
   }
 
-  const maxLookAhead = 3;
+  const enableLookaheadEl = document.getElementById('setting-enable-lookahead');
+  if (enableLookaheadEl && !enableLookaheadEl.checked) return;
+
+  const lookaheadElementsEl = document.getElementById('setting-lookahead-elements');
+  const maxLookAhead = lookaheadElementsEl ? (parseInt(lookaheadElementsEl.value) || 3) : 3;
+
   let lookAheadCount = 0;
 
   for (let i = currentIndex; i < state.globalParsedItems.length && lookAheadCount < maxLookAhead; i++) {
@@ -299,14 +314,18 @@ export async function processReadAheadQueue() {
 
       for (let fIdx = 0; fIdx < item.files.length; fIdx++) {
         const f = item.files[fIdx];
-        hasValidVideo = true;
+        if (f.hasBeenPlayed) continue;
 
-        if (!f.isLoaded && !f.isLoading) {
+        if (lookAheadCount >= maxLookAhead) break;
+
+        if (!f.resolvedPath && !f.requestedFile) continue;
+
+        if (!f.isLoaded && !f.isLoading && !f.hasBeenLoaded) {
           f.isLoading = true;
 
           const baseSlotToUse = parseInt(dom.inCurrentIndex.value) || 1;
           const slotToUse = await getSafeSlot(baseSlotToUse);
-          dom.inCurrentIndex.value = (slotToUse + 1 > (parseInt(dom.inPoolSize.value) || 15)) ? 1 : slotToUse + 1;
+          dom.inCurrentIndex.value = (slotToUse + 1 > (parseInt(document.getElementById('setting-poolsize')?.value) || 15)) ? 1 : slotToUse + 1;
 
           const dummyItemForVmix = { ...item, ...f, _sourceFileObj: f, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx, _automationCode: item.automationCode };
 
@@ -321,6 +340,7 @@ export async function processReadAheadQueue() {
               f.isPlaceholderLoaded = dummyItemForVmix.isPlaceholderLoaded;
               if (result !== false) {
                 f.isLoaded = true;
+                f.hasBeenLoaded = true;
                 f.isLoading = false;
                 syncFileVisualState(item, fIdx);
               } else {
@@ -338,8 +358,6 @@ export async function processReadAheadQueue() {
             }
           });
         }
-      }
-      if (hasValidVideo) {
         lookAheadCount++;
       }
     }
