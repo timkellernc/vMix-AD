@@ -19,6 +19,7 @@
 
     <div
       style="flex: 5; display: flex; justify-content: center; align-items: center; gap: 12px; padding: 0 20px; overflow: hidden;">
+      <button id="btn-clear-vmix" class="btn danger small" title="Clear all vMix pool slots">Clear</button>
       <button id="btn-reset-rundown" class="btn danger small" title="Reset Rundown to Default States">Reset</button>
       <button id="active-rundown-title" class="btn secondary"
         style="width: 100%; max-width: 400px; font-size: 1.1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 8px 20px; border-radius: 8px;"
@@ -246,7 +247,13 @@
         </div>
 
       </div>
-      <div class="modal-footer">
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; gap: 12px;">
+          <button id="btn-copy-api-log" class="btn secondary small" title="Copy the vMix API / event log to the clipboard">Copy API Log</button>
+          <button id="btn-clear-api-log" class="btn secondary small" title="Clear the API log">Clear Log</button>
+          <button id="btn-export-settings" class="btn secondary small">Export Settings</button>
+          <button id="btn-import-settings" class="btn secondary small">Import Settings</button>
+        </div>
         <button id="btn-save-settings" class="btn primary">Save & Close</button>
       </div>
     </div>

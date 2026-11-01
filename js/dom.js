@@ -1,6 +1,6 @@
 import { state, dom } from './state.js';
 import { getExt, formatDuration, parseDuration, formatTimeOfDay, showToast } from './utils.js';
-import { enqueueVmixAction, sendToVmix, getSafeSlot } from './media.js';
+import { enqueueVmixAction, sendToVmix, getSafeSlot, requestLookahead } from './media.js';
 import { executeTake, parseAutomationCode, syncAutomationUI, generateAutomationTooltip, calculateStartingVideoIndex } from './automation.js';
 import { optimisticUpdateTimerUI, pollOnAirTimer } from './timers.js';
 import { refreshSignatureQuietly } from './api.js';
@@ -421,6 +421,13 @@ export function syncFileVisualState(item, fileIndex) {
       btnRun.innerText = "Loading...";
       btnRun.classList.remove('success');
       btnRun.classList.add('primary');
+    } else if (fileObj.loadFailed) {
+      btnRun.innerText = "Failed";
+      btnRun.classList.remove('success');
+      btnRun.classList.add('primary');
+      btnRun.style.borderColor = 'var(--danger, #e74c3c)';
+      btnRun.style.color = 'var(--danger, #e74c3c)';
+      btnRun.style.backgroundColor = '';
     } else if (fileObj.isPlaceholderLoaded) {
       btnRun.innerText = "Searching...";
       btnRun.classList.remove('primary');
@@ -429,6 +436,16 @@ export function syncFileVisualState(item, fileIndex) {
       btnRun.innerText = fileObj.loadedSlot ? `Loaded [${fileObj.loadedSlot}]` : "Loaded";
       btnRun.classList.remove('primary');
       btnRun.classList.add('success');
+      btnRun.style.borderColor = '';
+      btnRun.style.color = '';
+      btnRun.style.backgroundColor = '';
+    } else if (fileObj.hasBeenLoaded) {
+      btnRun.innerText = "Loaded";
+      btnRun.classList.remove('primary');
+      btnRun.classList.add('success');
+      btnRun.style.borderColor = '';
+      btnRun.style.color = '';
+      btnRun.style.backgroundColor = '';
     } else {
       btnRun.innerText = "Load";
       btnRun.classList.remove('success');
@@ -686,6 +703,7 @@ export function attachFilesEventListeners(item, row) {
             fileObj.hasBeenPlayed = true;
             state.hasTriggeredAutomation = true;
             state.activeOnAirCmdIndex = -1;
+            requestLookahead();
           }
         }
       });

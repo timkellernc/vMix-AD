@@ -3,6 +3,7 @@ import { renderRows } from './dom.js';
 import { showToast } from './utils.js';
 import { refreshSignatureQuietly, loadApiRundown } from './api.js';
 import { testRawAutomation } from './automation.js';
+import { requestLookahead } from './media.js';
 
 export async function init(isStartup = false) {
   const settings = await window.api.getSettings();
@@ -216,6 +217,7 @@ export function setupSettingsListeners() {
       companionUrl: document.getElementById('setting-companion-url') ? document.getElementById('setting-companion-url').value : 'http://127.0.0.1:8000'
     };
     await window.api.saveSettings(settings);
+    requestLookahead();
 
     // If the directory changed and we have a rundown open, rescan files
     if (oldSettings.showDirectory !== dom.inShowdir.value && state.activeRundownId) {
@@ -227,6 +229,51 @@ export function setupSettingsListeners() {
     }
 
     dom.modalSettings.classList.remove('visible');
+  });
+
+  document.getElementById('btn-copy-api-log')?.addEventListener('click', async () => {
+    const text = await window.api.getApiLog();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    showToast(`Copied API log (${text ? text.split('\n').length : 0} lines).`, 'success');
+  });
+
+  document.getElementById('btn-clear-api-log')?.addEventListener('click', async () => {
+    await window.api.clearApiLog();
+    showToast('API log cleared.', 'success');
+  });
+
+  dom.btnExportSettings.addEventListener('click', async () => {
+    const settings = await window.api.getSettings();
+    const exportSettings = { ...settings };
+    delete exportSettings.rundownCreatorAPIKey;
+    delete exportSettings.rundownCreatorAPIToken;
+    
+    const success = await window.api.exportSettings(exportSettings);
+    if (success) showToast("Settings exported successfully!", "success");
+  });
+
+  dom.btnImportSettings.addEventListener('click', async () => {
+    const importedSettings = await window.api.importSettings();
+    if (importedSettings) {
+      const currentSettings = await window.api.getSettings();
+      importedSettings.rundownCreatorRadioStation = currentSettings.rundownCreatorRadioStation || importedSettings.rundownCreatorRadioStation;
+      importedSettings.rundownCreatorAPIKey = currentSettings.rundownCreatorAPIKey || importedSettings.rundownCreatorAPIKey;
+      importedSettings.rundownCreatorAPIToken = currentSettings.rundownCreatorAPIToken || importedSettings.rundownCreatorAPIToken;
+      
+      await window.api.saveSettings(importedSettings);
+      showToast("Settings imported successfully!", "success");
+      
+      init();
+    }
   });
 
   dom.btnSelectShowdir.addEventListener('click', async () => {

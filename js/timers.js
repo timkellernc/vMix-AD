@@ -1,6 +1,7 @@
 import { state, dom } from './state.js';
 import { formatTimeOfDay, formatLiveTime, showToast } from './utils.js';
 import { syncAutomationUI } from './automation.js';
+import { requestLookahead } from './media.js';
 
 export function initClock() {
   setInterval(() => {
@@ -65,6 +66,8 @@ export function optimisticUpdateTimerUI(rowId, resetCmdIndex = true) {
   }
   updateLiveTimers();
   syncAutomationUI();
+  state.lookaheadRowId = rowId;
+  requestLookahead();
 }
 
 
@@ -286,6 +289,10 @@ export async function pollOnAirTimer() {
                 targetRow.classList.add('on-air');
               }
             }
+          }
+          if (state.activeOnAirRowId !== state.lookaheadRowId) {
+            state.lookaheadRowId = state.activeOnAirRowId;
+            requestLookahead();
           }
         }
       }

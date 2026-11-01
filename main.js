@@ -196,6 +196,37 @@ ipcMain.handle('select-directory', async () => {
   return null;
 });
 
+ipcMain.handle('export-settings', async (event, settingsObj) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export Settings',
+    defaultPath: 'vmix-ad-settings.json',
+    filters: [{ name: 'JSON Files', extensions: ['json'] }]
+  });
+  if (!result.canceled && result.filePath) {
+    fs.writeFileSync(result.filePath, JSON.stringify(settingsObj, null, 2));
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('import-settings', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import Settings',
+    properties: ['openFile'],
+    filters: [{ name: 'JSON Files', extensions: ['json'] }]
+  });
+  if (!result.canceled && result.filePaths.length > 0) {
+    try {
+      const data = fs.readFileSync(result.filePaths[0], 'utf8');
+      return JSON.parse(data);
+    } catch (e) {
+      console.error("Failed to parse settings JSON:", e);
+      return null;
+    }
+  }
+  return null;
+});
+
 ipcMain.handle('select-file', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
@@ -234,8 +265,32 @@ function getExt(filename) {
   return parts.length > 1 ? parts.pop().toLowerCase() : '';
 }
 
+// A file only counts as ready once its size/mtime have been unchanged for this long,
+// so a file that is still being exported (Premiere / Media Encoder) isn't loaded half-written.
+const FILE_STABLE_MS = 3000;
+// A file first seen with an mtime at least this old wasn't just written, so it's trusted immediately.
+const FILE_SETTLED_AGE_MS = 10000;
+const fileStability = new Map(); // path -> { size, mtimeMs, since }
+
 function isFileReady(filePath) {
-  if (!fs.existsSync(filePath)) return false;
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    fileStability.delete(filePath);
+    return false;
+  }
+  if (!stat.isFile()) return false;
+
+  const now = Date.now();
+  let entry = fileStability.get(filePath);
+  if (!entry || entry.size !== stat.size || entry.mtimeMs !== stat.mtimeMs) {
+    const alreadySettled = !entry && (now - stat.mtimeMs) >= FILE_SETTLED_AGE_MS;
+    entry = { size: stat.size, mtimeMs: stat.mtimeMs, since: alreadySettled ? now - FILE_STABLE_MS : now };
+    fileStability.set(filePath, entry);
+  }
+  if (stat.size === 0 || (now - entry.since) < FILE_STABLE_MS) return false;
+
   try {
     const fd = fs.openSync(filePath, 'r+');
     fs.closeSync(fd);
@@ -247,6 +302,41 @@ function isFileReady(filePath) {
     // If it's read-only or another error occurs, assume it exists but cannot be written
     return true;
   }
+}
+
+// Video files must also be probeable by ffprobe: an unfinished mp4/mov has no index yet and fails here,
+// which is exactly the case where vMix would fail the import. Successful probes are cached per size/mtime.
+const VIDEO_EXT_RE = /\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i;
+const probedOk = new Map(); // path -> "size:mtimeMs"
+
+function probeDuration(filePath) {
+  return new Promise((resolve) => {
+    execFile(ffprobe.path, [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath
+    ], (error, stdout) => {
+      if (error) return resolve(null);
+      const duration = parseFloat(stdout);
+      resolve(isNaN(duration) ? null : duration);
+    });
+  });
+}
+
+async function isMediaReady(filePath) {
+  if (!isFileReady(filePath)) return false;
+  if (!VIDEO_EXT_RE.test(filePath)) return true;
+  let stat;
+  try { stat = fs.statSync(filePath); } catch (e) { return false; }
+  const sig = `${stat.size}:${stat.mtimeMs}`;
+  if (probedOk.get(filePath) === sig) return true;
+  const duration = await probeDuration(filePath);
+  if (duration && duration > 0) {
+    probedOk.set(filePath, sig);
+    return true;
+  }
+  return false;
 }
 
 // File Management & Fallbacks
@@ -321,14 +411,14 @@ ipcMain.handle('rescan-directories', () => {
 
 
 
-ipcMain.handle('resolve-media', (event, filename) => {
+ipcMain.handle('resolve-media', async (event, filename) => {
   if (!filename) return null;
 
   const showDir = store.get('showDirectory');
 
   // Check if filename is an absolute path
   if (path.isAbsolute(filename)) {
-    if (isFileReady(filename)) return { path: filename, isFallback: false };
+    if (await isMediaReady(filename)) return { path: filename, isFallback: false };
     filename = path.basename(filename);
   }
 
@@ -344,7 +434,7 @@ ipcMain.handle('resolve-media', (event, filename) => {
   if (showDir && fs.existsSync(showDir)) {
     for (const cand of candidates) {
       const showPath = path.join(showDir, cand);
-      if (isFileReady(showPath)) {
+      if (await isMediaReady(showPath)) {
         return { path: showPath, isFallback: false };
       }
     }
@@ -355,7 +445,7 @@ ipcMain.handle('resolve-media', (event, filename) => {
     const lowerFilename = cand.toLowerCase();
     if (showDictionary[lowerFilename]) {
       const showPath = showDictionary[lowerFilename];
-      if (isFileReady(showPath)) {
+      if (await isMediaReady(showPath)) {
         return { path: showPath, isFallback: false };
       }
     }
@@ -366,7 +456,7 @@ ipcMain.handle('resolve-media', (event, filename) => {
     const lowerFilename = cand.toLowerCase();
     if (fallbackDictionary[lowerFilename]) {
       const fallbackPath = fallbackDictionary[lowerFilename];
-      if (isFileReady(fallbackPath)) {
+      if (await isMediaReady(fallbackPath)) {
         return { path: fallbackPath, isFallback: true };
       }
     }
@@ -376,16 +466,38 @@ ipcMain.handle('resolve-media', (event, filename) => {
   return null;
 });
 
+// In-memory API / event log (capped) that the renderer can copy from the settings panel.
+const API_LOG_MAX = 8000;
+const apiLog = [];
+let apiLogSeq = 0;
+
+function logLine(text) {
+  const d = new Date();
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  const ts = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  apiLog.push(`${ts} ${text}`);
+  if (apiLog.length > API_LOG_MAX) apiLog.splice(0, apiLog.length - API_LOG_MAX);
+}
+
+ipcMain.handle('get-api-log', () => apiLog.join('\n'));
+ipcMain.handle('clear-api-log', () => { apiLog.length = 0; });
+ipcMain.on('log-event', (event, msg) => logLine(`## ${msg}`));
+
 // vMix API Request Handler (Avoids CORS issues from frontend)
 ipcMain.handle('vmix-request', async (event, commandStr) => {
+  const reqId = ++apiLogSeq;
+  const startedAt = Date.now();
+  logLine(`> vMix #${reqId} ${commandStr || 'XML State Request'}`);
   try {
     const ip = store.get('vmixIP') || '127.0.0.1:8088';
     const url = commandStr ? `http://${ip}/API/?${commandStr}` : `http://${ip}/API/`;
     console.log(`[${new Date().toISOString()}] [API CALL] vMix - Command: ${commandStr || 'XML State Request'}`);
     const response = await fetch(url);
     const text = await response.text();
+    logLine(`< vMix #${reqId} ${response.ok ? 'ok' : 'HTTP ' + response.status} ${Date.now() - startedAt}ms`);
     return { success: response.ok, data: text };
   } catch (error) {
+    logLine(`< vMix #${reqId} ERROR ${error.message} ${Date.now() - startedAt}ms`);
     console.error("vMix Error:", error);
     return { success: false, error: error.message };
   }
@@ -411,6 +523,7 @@ ipcMain.handle('rundown-request', async (event, action, params = {}) => {
 
     const url = `https://www.rundowncreator.com/${station}/API.php?${queryParams.toString()}`;
     console.log(`[${new Date().toISOString()}] [API CALL] RundownCreator - Action: ${action} | RowID: ${params.RowID || 'N/A'}`);
+    logLine(`> RundownCreator ${action} RowID=${params.RowID || 'N/A'}`);
     const response = await fetch(url);
     const serverDateHeader = response.headers.get('date');
     const textData = await response.text();

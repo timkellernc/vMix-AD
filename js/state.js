@@ -12,6 +12,9 @@ export const state = {
   draggedMappingRow: null,
   globalParsedItems: [],
   vmixActionQueue: Promise.resolve(),
+  vmixBusyUntil: 0,
+  lookaheadTimer: null,
+  lookaheadRowId: null,
   globalSlotMap: {},
   activeRundownId: null,
 
@@ -66,6 +69,8 @@ export const dom = {
   btnCloseSettings: document.getElementById('btn-close-settings'),
   btnSaveSettings: document.getElementById('btn-save-settings'),
   btnCancelSettings: document.getElementById('btn-cancel-settings'),
+  btnExportSettings: document.getElementById('btn-export-settings'),
+  btnImportSettings: document.getElementById('btn-import-settings'),
 
   modalAutomationMappings: document.getElementById('modal-automation-mappings'),
   btnOpenMappings: document.getElementById('btn-open-mappings'),
@@ -126,6 +131,7 @@ export const dom = {
   btnInit: document.getElementById('btn-init'),
   btnLoadBlock: document.getElementById('btn-load-block'),
   btnLoadElement: document.getElementById('btn-load-element'),
+  btnClearVmix: document.getElementById('btn-clear-vmix'),
 
   inCurrentIndex: document.getElementById('current-index-input'),
 

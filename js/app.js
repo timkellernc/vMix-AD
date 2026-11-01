@@ -3,7 +3,7 @@ import { init, setupSettingsListeners } from './settings.js';
 import { renderRows, appendRowItem, syncFileVisualState, syncRowFilesToServer, updateRowItem } from './dom.js';
 import { startTimerOnNextRow, startTimerOnPrevRow, optimisticUpdateTimerUI, pollOnAirTimer, initClock } from './timers.js';
 import { executeNextSpacebarAction } from './automation.js';
-import { enqueueVmixAction, processBatch, startReadAheadQueue, pollMissingMedia } from './media.js';
+import { enqueueVmixAction, processBatch, pollMissingMedia, clearVmix } from './media.js';
 import { refreshSignatureQuietly, getApiRowsSignature, loadApiRundown } from './api.js';
 import { showToast } from './utils.js';
 
@@ -114,6 +114,7 @@ dom.btnInit.addEventListener('click', () => {
         item.files.forEach(f => {
           f.isLoaded = false;
           f.hasBeenLoaded = false;
+          f.loadFailed = false;
           f.isLoading = false;
           f.isPlaceholderLoaded = false;
         });
@@ -142,6 +143,12 @@ dom.btnInit.addEventListener('click', () => {
     const poolSize = parseInt(dom.inPoolSize.value) || 15;
     await processBatch(poolSize, false);
     dom.btnInit.disabled = false;
+  });
+});
+
+dom.btnClearVmix.addEventListener('click', () => {
+  enqueueVmixAction(async () => {
+    await clearVmix();
   });
 });
 

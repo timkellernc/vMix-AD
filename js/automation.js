@@ -1,6 +1,6 @@
 import { state, dom } from './state.js';
 import { optimisticUpdateTimerUI, pollOnAirTimer } from './timers.js';
-import { getSafeSlot, sendToVmix, enqueueVmixAction, processReadAheadQueue, resolveMixIndex } from './media.js';
+import { getSafeSlot, sendToVmix, enqueueVmixAction, resolveMixIndex, isVmixInputHealthy, markVmixBusy, requestLookahead } from './media.js';
 import { syncFileVisualState, updateRowItem } from './dom.js';
 import { showToast } from './utils.js';
 
@@ -105,6 +105,20 @@ export async function calculatePreviewDelay() {
   return previewDelayMs;
 }
 
+// Changing vMix's Preview while a take or transition is still running can redirect a Stinger to the wrong
+// input, so the preview step waits until no take is in flight and the transition's busy window has passed.
+function previewWhenFree(cursor) {
+  if (state.lastPreviewCursorRow !== cursor.row || state.lastPreviewCursorCmd !== cursor.cmd) return; // cursor moved on
+  const busyFor = (state.vmixBusyUntil || 0) - Date.now();
+  if (state.activeAutomationPromise || busyFor > 0) {
+    if (state.previewTimeout) clearTimeout(state.previewTimeout);
+    state.previewTimeout = setTimeout(() => previewWhenFree(cursor), Math.max(busyFor, 0) + 100);
+    return;
+  }
+  window.api.logEvent(`PREVIEW-NEXT row ${cursor.row} cmd ${cursor.cmd}`);
+  previewNextCommand(cursor);
+}
+
 export function syncAutomationUI() {
   const nextCursor = getNextStepCursor();
 
@@ -117,9 +131,7 @@ export function syncAutomationUI() {
       calculatePreviewDelay().then(delayMs => {
         if (state.lastPreviewCursorRow === nextCursor.row && state.lastPreviewCursorCmd === nextCursor.cmd) {
           if (state.previewTimeout) clearTimeout(state.previewTimeout);
-          state.previewTimeout = setTimeout(() => {
-            previewNextCommand(nextCursor);
-          }, delayMs);
+          state.previewTimeout = setTimeout(() => previewWhenFree(nextCursor), delayMs);
         }
       });
     }
@@ -415,6 +427,81 @@ export function calculateStartingVideoIndex(cmds, targetCmdIndex) {
   return videoIndex;
 }
 
+const VIDEO_FILE_RE = /\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i;
+
+// Play-time safety net: makes sure the file's slot actually holds it in vMix before we transition to it.
+// Returns { slot, reloaded }; slot is null if the file could not be loaded.
+async function ensureFileLoaded(item, fileObj, fileIndex, rowElement) {
+  // Release a lookahead load that is holding off for this very file, then let it finish rather than fight it.
+  fileObj.needsNow = true;
+  try {
+    for (let waited = 0; fileObj.isLoading && waited < 15000; waited += 100) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return await ensureFileLoadedInner(item, fileObj, fileIndex, rowElement);
+  } finally {
+    fileObj.needsNow = false;
+  }
+}
+
+async function ensureFileLoadedInner(item, fileObj, fileIndex, rowElement) {
+  const prefix = dom.inPrefix.value || 'Video';
+
+  let reuseSlot = null;
+  if (fileObj.isLoaded && fileObj.loadedSlot) {
+    if (fileObj.isPlaceholderLoaded) return { slot: fileObj.loadedSlot, reloaded: false };
+
+    const mapped = state.globalSlotMap[fileObj.loadedSlot];
+    const stillOurs = !!mapped && mapped._sourceFileObj === fileObj;
+    const isVideo = !!(fileObj.resolvedPath && VIDEO_FILE_RE.test(fileObj.resolvedPath));
+    if (stillOurs && await isVmixInputHealthy(`${prefix} ${fileObj.loadedSlot}`, isVideo)) {
+      return { slot: fileObj.loadedSlot, reloaded: false };
+    }
+    console.warn(`[play-time check] ${prefix} ${fileObj.loadedSlot} missing or invalid in vMix, reloading`);
+    if (stillOurs) reuseSlot = fileObj.loadedSlot;
+  }
+
+  let slotToUse = reuseSlot;
+  if (!slotToUse) {
+    const inCurrentIndex = document.getElementById('current-index-input');
+    const inPoolSize = document.getElementById('setting-poolsize');
+    const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
+    slotToUse = await getSafeSlot(baseSlotToUse);
+    inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize ? inPoolSize.value : 15) || 15)) ? 1 : slotToUse + 1;
+  }
+
+  window.api.logEvent(`PLAY-TIME LOAD ${fileObj.originalFile} -> slot ${slotToUse}`);
+  const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
+  const result = await sendToVmix(dummyItemForVmix, slotToUse);
+  syncFileVisualState(item, fileIndex);
+  if (result === false) return { slot: null, reloaded: true };
+  return { slot: slotToUse, reloaded: true };
+}
+
+// Keeps lookahead loads away from vMix while a transition renders and the incoming video starts.
+// The gate goes up immediately; for stingers it is then extended to the stinger's configured length.
+function beginTransition(func, durParam) {
+  window.api.logEvent(`TRANSITION ${func} ${durParam || ''}`);
+  const durMatch = /Duration=(\d+)/i.exec(durParam || '');
+  const durMs = durMatch ? parseInt(durMatch[1], 10) : 0;
+  markVmixBusy(durMs + 1500);
+
+  if (func && func.toLowerCase().includes('stinger')) {
+    markVmixBusy(4000);
+    window.api.vmixRequest('').then(res => {
+      if (!res || !res.success) return;
+      const xml = new DOMParser().parseFromString(res.data, "text/xml");
+      for (const t of xml.querySelectorAll('transitions transition')) {
+        if (t.getAttribute('effect') === func) {
+          const dur = parseInt(t.getAttribute('duration'), 10);
+          if (dur > 0) markVmixBusy(dur * 2 + 1500);
+          break;
+        }
+      }
+    }).catch(() => {});
+  }
+}
+
 export async function executeTake(item, parsedTokensArray, rowElement, startingVideoIndex = 0) {
   let autoIncrementVideoIndex = startingVideoIndex;
 
@@ -426,11 +513,13 @@ export async function executeTake(item, parsedTokensArray, rowElement, startingV
     }, rowElement);
   }
   
-  await processReadAheadQueue();
+  requestLookahead();
 }
 
 export async function executeAutomationTokens(item, tokens, getNextVideoIndex, rowElement) {
   state.hasTriggeredAutomation = true;
+  markVmixBusy(1500);
+  window.api.logEvent(`TAKE tokens: ${tokens.map(t => t.type + ':' + (t.function || t.target || '') + (t.number !== null && t.number !== undefined ? '#' + t.number : '')).join(' ')} | row ${item.rowId}`);
   let transitionToken = tokens.find(t => t.type === 'Transition');
   let explicitTransitionFunc = transitionToken ? transitionToken.function : null;
   let defaultDuration = dom.inFadeDuration ? dom.inFadeDuration.value : '500';
@@ -530,39 +619,33 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
           continue;
         }
 
-        let finalSlot = null;
-        if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
-          const inCurrentIndex = document.getElementById('current-index-input');
-          const inPoolSize = document.getElementById('setting-poolsize');
-          const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
-          const slotToUse = await getSafeSlot(baseSlotToUse);
-          inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize ? inPoolSize.value : 15) || 15)) ? 1 : slotToUse + 1;
-
-          const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
-          await sendToVmix(dummyItemForVmix, slotToUse);
-          finalSlot = slotToUse;
-
-          syncFileVisualState(item, fileIndex);
-
+        const ensured = await ensureFileLoaded(item, targetFileObj, fileIndex, rowElement);
+        if (ensured.reloaded) {
           const rowIndex = state.globalParsedItems.findIndex(i => String(i.rowId) === String(item.rowId));
           if (rowIndex > -1) {
             updateRowItem(item, rowElement, rowIndex + 1);
             syncAutomationUI();
           }
-        } else {
-          finalSlot = targetFileObj.loadedSlot;
+        }
+        const finalSlot = ensured.slot;
+        if (!finalSlot) {
+          showToast(`Could not load ${targetFileObj.originalFile || 'video'} in vMix! Skipping transition.`, 'error');
+          currentDestination = null;
+          continue;
         }
 
         const prefix = dom.inPrefix.value || 'Video';
         const inputName = `${prefix} ${finalSlot}`;
         const funcToUse = explicitTransitionFunc || (currentDestination && currentDestFunc ? currentDestFunc : defaultTransitionFunc);
         const durParam = (funcToUse === explicitTransitionFunc) ? explicitTransitionDuration : `&Duration=${defaultDuration}`;
+        window.api.logEvent(`TARGET fileIndex ${fileIndex} '${targetFileObj.originalFile}' -> ${inputName}`);
         if (!targetFileObj.isPlaceholderLoaded) {
           if (invalidDestination) {
             showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
             currentDestination = null;
             continue;
           }
+          beginTransition(funcToUse, durParam);
           await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
           targetFileObj.hasBeenPlayed = true;
           
@@ -601,6 +684,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
           currentDestination = null;
           continue;
         }
+        beginTransition(funcToUse, durParam);
         await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(target)}${mixParam}${durParam}${valParam}`);
       }
       currentDestination = null;
@@ -620,6 +704,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
             currentDestination = null;
             continue;
           }
+          beginTransition(func, durParam);
           await window.api.vmixRequest(`Function=${func}&Input=${encodeURIComponent(target)}${mixParam}${durParam}`);
         }
         currentDestination = null;
@@ -684,20 +769,11 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
     let fileIndex = getNextVideoIndex();
     let targetFileObj = item.files && item.files[fileIndex];
     if (targetFileObj) {
-      let finalSlot = null;
-      if (!targetFileObj.isLoaded || !targetFileObj.loadedSlot) {
-        const inCurrentIndex = document.getElementById('current-index-input');
-        const inPoolSize = document.getElementById('setting-poolsize');
-        const baseSlotToUse = parseInt(inCurrentIndex.value) || 1;
-        const slotToUse = await getSafeSlot(baseSlotToUse);
-        if (inCurrentIndex) inCurrentIndex.value = (slotToUse + 1 > (parseInt(inPoolSize ? inPoolSize.value : 15) || 15)) ? 1 : slotToUse + 1;
-
-        const dummyItemForVmix = { ...item, ...targetFileObj, _sourceFileObj: targetFileObj, _sourceRowId: rowElement.id, _sourceFileIndex: fileIndex };
-        await sendToVmix(dummyItemForVmix, slotToUse);
-        finalSlot = slotToUse;
-        syncFileVisualState(item, fileIndex);
-      } else {
-        finalSlot = targetFileObj.loadedSlot;
+      const ensured = await ensureFileLoaded(item, targetFileObj, fileIndex, rowElement);
+      const finalSlot = ensured.slot;
+      if (!finalSlot) {
+        showToast(`Could not load ${targetFileObj.originalFile || 'video'} in vMix! Skipping transition.`, 'error');
+        return;
       }
 
       const prefix = dom.inPrefix.value || 'Video';
@@ -720,6 +796,7 @@ export async function executeAutomationTokens(item, tokens, getNextVideoIndex, r
         if (invalidDestination) {
           showToast(`Destination ${currentDestination} not found in vMix! Aborting transition.`);
         } else {
+          beginTransition(funcToUse, durParam);
           await window.api.vmixRequest(`Function=${funcToUse}&Input=${encodeURIComponent(inputName)}${mixParam}${durParam}`);
           const isVideo = targetFileObj && targetFileObj.resolvedPath && targetFileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i);
           if (isVideo) {

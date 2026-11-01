@@ -84,7 +84,65 @@ export async function getSafeSlot(desiredSlot) {
   return slot;
 }
 
+// Takes have priority over lookahead: while a take is sending commands or a transition is still
+// rendering, lookahead loads hold off so they don't compete with it for vMix.
+export function markVmixBusy(ms) {
+  state.vmixBusyUntil = Math.max(state.vmixBusyUntil || 0, Date.now() + ms);
+}
+
+export function isVmixBusy() {
+  return Date.now() < (state.vmixBusyUntil || 0);
+}
+
+// Resolves once vMix is free, or immediately if the current take needs this file (fileObj.needsNow).
+export async function waitForVmixFree(fileObj) {
+  while (isVmixBusy() && !(fileObj && fileObj.needsNow)) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+
+const LOAD_RETRY_DELAY_MS = 3000;
+const VERIFY_ATTEMPTS = 6;
+const VERIFY_INTERVAL_MS = 500;
+
+// Looks up an input by its title in the vMix XML. Returns null if vMix can't be reached,
+// otherwise { exists, type, duration } (duration in ms).
+export async function getVmixInputInfo(inputName) {
+  try {
+    const res = await window.api.vmixRequest('');
+    if (!res || !res.success) return null;
+    const doc = new DOMParser().parseFromString(res.data, "text/xml");
+    const node = Array.from(doc.querySelectorAll('input')).find(n => n.getAttribute('title') === inputName);
+    if (!node) return { exists: false, type: null, duration: 0 };
+    return {
+      exists: true,
+      type: node.getAttribute('type'),
+      duration: parseInt(node.getAttribute('duration'), 10) || 0
+    };
+  } catch (err) {
+    console.error("Failed to read vMix input info:", err);
+    return null;
+  }
+}
+
+// An input is healthy if it exists and, for video, vMix reports a non-zero duration (a failed import reads 0).
+export async function isVmixInputHealthy(inputName, isVideo) {
+  const info = await getVmixInputInfo(inputName);
+  if (!info || !info.exists) return false;
+  return !isVideo || info.duration > 0;
+}
+
+async function waitForInputHealthy(inputName, isVideo, gate) {
+  for (let i = 0; i < VERIFY_ATTEMPTS; i++) {
+    if (gate) await gate();
+    if (await isVmixInputHealthy(inputName, isVideo)) return true;
+    await new Promise(r => setTimeout(r, VERIFY_INTERVAL_MS));
+  }
+  return false;
+}
+
 export async function sendToVmix(item, slotIndex) {
+  window.api.logEvent(`LOAD START ${item.originalFile || item.requestedFile} -> slot ${slotIndex}${item._lookahead ? ' (lookahead)' : ''}`);
   const prevItem = state.globalSlotMap[slotIndex];
   if (prevItem && prevItem !== item) {
     prevItem.loadedSlot = null;
@@ -128,9 +186,11 @@ export async function sendToVmix(item, slotIndex) {
   }
   state.globalSlotMap[slotIndex] = item;
   item.loadedSlot = slotIndex;
+  item.loadFailed = false;
   if (item._sourceFileObj) {
     item._sourceFileObj.loadedSlot = slotIndex;
     item._sourceFileObj.isLoaded = true;
+    item._sourceFileObj.loadFailed = false;
   }
 
   let targetPath = item.resolvedPath;
@@ -180,12 +240,7 @@ export async function sendToVmix(item, slotIndex) {
     }
   });
 
-  await window.api.vmixRequest(`Function=RemoveInput&Input=${encodeURIComponent(inputName)}`);
-  await window.api.vmixRequest(`Function=AddInput&Value=${type}|${targetPath}`);
-
   const initialInputName = isPlaceholder ? 'placeholder.png' : item.originalFile;
-  await window.api.vmixRequest(`Function=SetInputName&Value=${encodeURIComponent(inputName)}&Input=${encodeURIComponent(initialInputName)}`);
-
   const parallelCmds = [
     `Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${encodeURIComponent(inputName)}`,
     ...audioCmds,
@@ -193,10 +248,49 @@ export async function sendToVmix(item, slotIndex) {
     `Function=AudioOff&Input=${encodeURIComponent(inputName)}`
   ];
 
-  for (const cmd of parallelCmds) {
-    await window.api.vmixRequest(cmd);
+  // Lookahead loads yield to takes between every vMix call; takes and manual loads are never gated.
+  const gate = item._lookahead ? () => waitForVmixFree(item._sourceFileObj) : null;
+
+  const loadOnce = async () => {
+    if (gate) await gate();
+    await window.api.vmixRequest(`Function=RemoveInput&Input=${encodeURIComponent(inputName)}`);
+    if (gate) await gate();
+    await window.api.vmixRequest(`Function=AddInput&Value=${type}|${targetPath}`);
+    if (gate) await gate();
+    await window.api.vmixRequest(`Function=SetInputName&Value=${encodeURIComponent(inputName)}&Input=${encodeURIComponent(initialInputName)}`);
+    for (const cmd of parallelCmds) {
+      if (gate) await gate();
+      await window.api.vmixRequest(cmd);
+    }
+  };
+
+  const isVideoLoad = type === 'Video';
+  await loadOnce();
+  let verified = await waitForInputHealthy(inputName, isVideoLoad, gate);
+  if (!verified) {
+    console.warn(`[vMix load] ${inputName} failed verification, retrying in ${LOAD_RETRY_DELAY_MS}ms`);
+    await new Promise(r => setTimeout(r, LOAD_RETRY_DELAY_MS));
+    if (gate) await gate();
+    await loadOnce();
+    verified = await waitForInputHealthy(inputName, isVideoLoad, gate);
   }
 
+  if (!verified) {
+    for (const obj of [item, item._sourceFileObj]) {
+      if (!obj) continue;
+      obj.loadFailed = true;
+      obj.isLoaded = false;
+      obj.hasBeenLoaded = false;
+      obj.isPlaceholderLoaded = false;
+      obj.loadedSlot = null;
+    }
+    if (state.globalSlotMap[slotIndex] === item) state.globalSlotMap[slotIndex] = null;
+    window.api.logEvent(`LOAD FAILED ${initialInputName} -> ${inputName}`);
+    showToast(`Failed to load ${initialInputName} into ${inputName}.`, 'error');
+    return false;
+  }
+
+  window.api.logEvent(`LOAD OK ${initialInputName} -> ${inputName}`);
   item.isLoaded = true;
   item.hasBeenLoaded = true;
   if (item._sourceFileObj) {
@@ -230,7 +324,7 @@ export async function processBatch(count, limitToSegment = false) {
       const fileObj = item.files[fIdx];
 
       if (itemsSent >= count) return;
-      if (item.isFloated || fileObj.isLoaded || fileObj.isLoading || fileObj.hasBeenLoaded || (!fileObj.resolvedPath && !fileObj.requestedFile)) continue;
+      if (item.isFloated || fileObj.isLoaded || fileObj.isLoading || fileObj.hasBeenLoaded || fileObj.loadFailed || (!fileObj.resolvedPath && !fileObj.requestedFile)) continue;
 
       if (limitToSegment) {
         const getBlockLetter = (item) => {
@@ -265,10 +359,11 @@ export async function processBatch(count, limitToSegment = false) {
       if (btn) btn.innerText = "Sending...";
 
       const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx };
-      await sendToVmix(dummyItemForVmix, slotToUse);
+      const batchResult = await sendToVmix(dummyItemForVmix, slotToUse);
       fileObj.isLoading = false;
 
       syncFileVisualState(item, fIdx);
+      if (batchResult === false) continue;
 
       let nextSlot = slotToUse + 1;
       if (nextSlot > poolSize) nextSlot = 1; 
@@ -300,6 +395,8 @@ export async function processReadAheadQueue() {
     return;
   }
 
+  if (isVmixBusy()) return; // a take is running; try again on the next tick
+
   const enableLookaheadEl = document.getElementById('setting-enable-lookahead');
   if (enableLookaheadEl && !enableLookaheadEl.checked) return;
 
@@ -321,14 +418,14 @@ export async function processReadAheadQueue() {
 
         if (!f.resolvedPath && !f.requestedFile) continue;
 
-        if (!f.isLoaded && !f.isLoading && !f.hasBeenLoaded) {
+        if (!f.isLoaded && !f.isLoading && !f.hasBeenLoaded && !f.loadFailed) {
           f.isLoading = true;
 
           const baseSlotToUse = parseInt(dom.inCurrentIndex.value) || 1;
           const slotToUse = await getSafeSlot(baseSlotToUse);
           dom.inCurrentIndex.value = (slotToUse + 1 > (parseInt(document.getElementById('setting-poolsize')?.value) || 15)) ? 1 : slotToUse + 1;
 
-          const dummyItemForVmix = { ...item, ...f, _sourceFileObj: f, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx, _automationCode: item.automationCode };
+          const dummyItemForVmix = { ...item, ...f, _sourceFileObj: f, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx, _automationCode: item.automationCode, _lookahead: true };
 
           const entry = allRows[i] ? allRows[i].querySelector(`.file-entry[data-file-index="${fIdx}"]`) : null;
           const btn = entry ? (entry.querySelector('.btn-run-file') || entry.querySelector('.btn-run')) : null;
@@ -365,13 +462,16 @@ export async function processReadAheadQueue() {
   }
 }
 
-export function startReadAheadQueue() {
-  if (state.readAheadInterval) clearInterval(state.readAheadInterval);
-  const tick = async () => {
+// Lookahead is event-driven: called whenever something changes that could put a new file inside the
+// lookahead window (take finished, on-air row changed, missing file found, ...). Debounced, and held off
+// until vMix is free so it never competes with a running take or transition.
+export function requestLookahead() {
+  clearTimeout(state.lookaheadTimer);
+  const busyFor = Math.max(0, (state.vmixBusyUntil || 0) - Date.now());
+  state.lookaheadTimer = setTimeout(async () => {
+    if (isVmixBusy()) return requestLookahead(); // busy window was extended; wait again
     await processReadAheadQueue();
-  };
-  tick();
-  state.readAheadInterval = setInterval(tick, 4000);
+  }, busyFor + 50);
 }
 
 export async function pollMissingMedia() {
@@ -428,6 +528,7 @@ export async function pollMissingMedia() {
                 btnRun.style.opacity = '1';
                 btnRun.innerText = "Load";
               }
+              requestLookahead();
 
               if (fileObj.resolvedPath.match(/\.(mp4|mov|webm|mkv|mxf|mpg|m4v|ts)$/i)) {
                 try {
@@ -452,10 +553,12 @@ export async function pollMissingMedia() {
                   if (runBtn) runBtn.innerText = "Replacing...";
 
                   const dummyItemForVmix = { ...item, ...fileObj, _sourceFileObj: fileObj, _sourceRowId: `row-item-${i + 1}`, _sourceFileIndex: fIdx };
-                  await sendToVmix(dummyItemForVmix, fileObj.loadedSlot);
+                  const replaceResult = await sendToVmix(dummyItemForVmix, fileObj.loadedSlot);
 
-                  fileObj.isPlaceholderLoaded = false;
-                  fileObj.isLoaded = true;
+                  if (replaceResult !== false) {
+                    fileObj.isPlaceholderLoaded = false;
+                    fileObj.isLoaded = true;
+                  }
                   syncFileVisualState(item, fIdx);
                 });
               }
@@ -468,5 +571,62 @@ export async function pollMissingMedia() {
     console.error("Auto-scanner error:", e);
   } finally {
     state.missingMediaPollTimeout = setTimeout(pollMissingMedia, 5000);
+  }
+}
+
+export async function clearVmix() {
+  const poolSize = parseInt(document.getElementById('setting-poolsize')?.value) || 15;
+  const placeholderPath = await window.api.getPlaceholderPath();
+  const prefix = dom.inPrefix.value || 'Video';
+  const firstLoc = parseInt(dom.inFirstLoc.value) || 9;
+
+  dom.btnClearVmix.disabled = true;
+  dom.btnClearVmix.innerText = "Clearing...";
+
+  try {
+    const activeTitles = dom.inProtectProgram.checked ? await getVmixActiveSlotTitles() : [];
+
+    for (let slotIndex = 1; slotIndex <= poolSize; slotIndex++) {
+      const inputName = `${prefix} ${slotIndex}`;
+
+      if (activeTitles.includes(inputName)) {
+        continue;
+      }
+
+      await window.api.vmixRequest(`Function=RemoveInput&Input=${encodeURIComponent(inputName)}`);
+      
+      const urlSafePath = encodeURIComponent(placeholderPath);
+      await window.api.vmixRequest(`Function=AddInput&Value=Image|${urlSafePath}`);
+      await window.api.vmixRequest(`Function=SetInputName&Value=${encodeURIComponent(inputName)}&Input=placeholder.png`);
+      await window.api.vmixRequest(`Function=MoveInput&Value=${firstLoc + slotIndex - 1}&Input=${encodeURIComponent(inputName)}`);
+      
+      if (state.globalSlotMap[slotIndex]) {
+        const oldItem = state.globalSlotMap[slotIndex];
+        oldItem.loadedSlot = null;
+        if (oldItem._sourceFileObj) {
+          oldItem._sourceFileObj.loadedSlot = null;
+          oldItem._sourceFileObj.isLoaded = false;
+          oldItem._sourceFileObj.isPlaceholderLoaded = false;
+        }
+        state.globalSlotMap[slotIndex] = null;
+      }
+    }
+
+    state.globalParsedItems.forEach((item, i) => {
+      if (item.files) {
+        item.files.forEach((f, fIdx) => {
+          syncFileVisualState(item, fIdx);
+        });
+      }
+    });
+
+    dom.inCurrentIndex.value = 1;
+    showToast("vMix slots cleared and reset.", "success");
+  } catch (err) {
+    console.error("Error clearing vMix:", err);
+    showToast("Error clearing vMix.", "error");
+  } finally {
+    dom.btnClearVmix.disabled = false;
+    dom.btnClearVmix.innerText = "Clear";
   }
 }
